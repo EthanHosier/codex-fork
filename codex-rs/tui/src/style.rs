@@ -85,28 +85,42 @@ pub(crate) fn table_separator_style() -> Style {
 
 /// Returns the shared accent style for active or selected TUI controls.
 pub(crate) fn accent_style() -> Style {
-    if matches!(
-        effective_stdout_color_level(),
-        StdoutColorLevel::TrueColor | StdoutColorLevel::Ansi256
-    ) && let Some(mut style) =
-        crate::render::highlight::foreground_style_for_scopes(&["codex.accent"])
-    {
-        if let Some(Color::Rgb(r, g, b)) = style.fg {
-            style = style.fg(best_color((r, g, b)));
-        }
-        return style.bold();
+    if let Some(color) = theme_accent_color() {
+        return Style::default().fg(color).bold();
     }
     accent_style_for(default_bg())
 }
 
 /// Returns the foreground accent without imposing bold or dim text modifiers.
 pub(crate) fn accent_color() -> Color {
+    if let Some(color) = theme_accent_color() {
+        return readable_color_on(color, /*background*/ None);
+    }
     accent_color_for(default_bg())
 }
 
 /// Resolve emphasis against the fill actually painted behind it.
 pub(crate) fn accent_color_on(background: Option<Color>) -> Color {
+    if let Some(color) = theme_accent_color() {
+        return readable_color_on(color, background);
+    }
     accent_color_for(background_rgb(background))
+}
+
+fn theme_accent_color() -> Option<Color> {
+    if !matches!(
+        effective_stdout_color_level(),
+        StdoutColorLevel::TrueColor | StdoutColorLevel::Ansi256
+    ) {
+        return None;
+    }
+
+    let color = crate::render::highlight::foreground_style_for_scopes(&["codex.accent"])?
+        .fg?;
+    Some(match color {
+        Color::Rgb(r, g, b) => best_color((r, g, b)),
+        color => color,
+    })
 }
 
 fn background_rgb(background: Option<Color>) -> Option<(u8, u8, u8)> {
