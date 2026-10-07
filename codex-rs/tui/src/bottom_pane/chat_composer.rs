@@ -29,8 +29,8 @@
 //!
 //! # Key Event Routing
 //!
-//! Plain Left opens agents when the local-daemon composer is empty and available for input.
-//! Explicit editor remaps take precedence.
+//! The feature-selected agents shortcut opens the overview when the local-daemon composer is
+//! empty and available for input.
 //! Most key handling goes through [`ChatComposer::handle_key_event`], which dispatches to a
 //! popup-specific handler if a popup is visible and otherwise to
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
@@ -3779,7 +3779,8 @@ impl ChatComposer {
             return false;
         }
 
-        if key_hint::plain(KeyCode::Left).is_press(*key_event) && self.agents_navigation_available()
+        if crate::bottom_pane::agents_navigation_shortcut_key().is_press(*key_event)
+            && self.agents_navigation_available()
         {
             self.app_event_tx.send(AppEvent::OpenAgentsOverview);
             return true;

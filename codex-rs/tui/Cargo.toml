@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 autobins = false
 
+[features]
+default = ["custom-agents-overview"]
+custom-agents-overview = []
+
 [[bin]]
 name = "codex-tui"
 path = "src/main.rs"

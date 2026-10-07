@@ -559,7 +559,15 @@ async fn external_writer_notice_offers_command_center_on_shared_servers() {
         widget.show_external_writer_thread();
         for width in [60, 100] {
             let rendered = crate::chatwidget::tests::render_bottom_popup(&widget, width);
-            insta::assert_snapshot!(format!("external_writer_command_center_{width}"), rendered);
+            let feature_suffix = if cfg!(feature = "custom-agents-overview") {
+                "_ctrl_q"
+            } else {
+                ""
+            };
+            insta::assert_snapshot!(
+                format!("external_writer_command_center_{width}{feature_suffix}"),
+                rendered
+            );
         }
     }
 }

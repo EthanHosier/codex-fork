@@ -41,6 +41,7 @@ fn parent_owned_thread_allows_safe_command_selected_from_prefix() {
 }
 
 #[test]
+#[cfg(not(feature = "custom-agents-overview"))]
 fn left_navigates_only_from_an_empty_prompt() {
     let (mut composer, mut events) = new_test_composer();
     composer.set_agents_navigation_enabled(/*enabled*/ true);
@@ -64,7 +65,24 @@ fn left_navigates_only_from_an_empty_prompt() {
 }
 
 #[test]
-fn left_respects_attachments_pastes_and_other_input_surfaces() {
+#[cfg(feature = "custom-agents-overview")]
+fn ctrl_q_opens_agents_overview_only_from_an_empty_prompt() {
+    let (mut composer, mut events) = new_test_composer();
+    composer.set_agents_navigation_enabled(/*enabled*/ true);
+
+    composer.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert_matches!(events.try_recv(), Ok(AppEvent::OpenAgentsOverview));
+
+    composer.handle_key_event(KeyCode::Left.into());
+    assert!(events.try_recv().is_err());
+
+    composer.insert_str("draft");
+    composer.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert!(events.try_recv().is_err());
+}
+
+#[test]
+fn agents_shortcut_respects_attachments_pastes_and_other_input_surfaces() {
     let setups: [fn(&mut ChatComposer); 4] = [
         |composer| composer.config = ChatComposerConfig::plain_text(),
         |composer| composer.set_remote_image_urls(vec!["https://example.com/image.png".into()]),
@@ -79,11 +97,22 @@ fn left_respects_attachments_pastes_and_other_input_surfaces() {
         let (mut composer, mut events) = new_test_composer();
         composer.set_agents_navigation_enabled(/*enabled*/ true);
         setup(&mut composer);
-        composer.handle_key_event(KeyCode::Left.into());
+        composer.handle_key_event(agents_shortcut_key());
         assert!(
             !std::iter::from_fn(|| events.try_recv().ok())
                 .any(|event| matches!(event, AppEvent::OpenAgentsOverview))
         );
+    }
+}
+
+fn agents_shortcut_key() -> KeyEvent {
+    #[cfg(feature = "custom-agents-overview")]
+    {
+        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)
+    }
+    #[cfg(not(feature = "custom-agents-overview"))]
+    {
+        KeyCode::Left.into()
     }
 }
 
@@ -94,8 +123,13 @@ fn agents_navigation_hint_snapshots() {
         "agents_navigation_help",
         "agents_navigation_status",
     ] {
+        let snapshot_name = if cfg!(feature = "custom-agents-overview") {
+            format!("{name}_ctrl_q")
+        } else {
+            name.to_string()
+        };
         snapshot_composer_state_with_width(
-            name,
+            &snapshot_name,
             /*width*/ 80,
             /*enhanced_keys_supported*/ false,
             |composer| {
@@ -116,7 +150,7 @@ fn agents_navigation_hint_snapshots() {
 }
 
 #[test]
-fn left_respects_editor_and_vim_history_remaps() {
+fn agents_shortcut_is_independent_of_editor_and_vim_left_remaps() {
     use codex_config::types::KeybindingSpec;
     use codex_config::types::KeybindingsSpec;
     use codex_config::types::TuiKeymap;
@@ -136,9 +170,15 @@ fn left_respects_editor_and_vim_history_remaps() {
         }
         composer.set_keymap_bindings(&RuntimeKeymap::from_config(&config).unwrap());
         composer.set_vim_enabled(vim);
-        assert!(composer.footer_props().key_hints.agents.is_none());
-        composer.handle_key_event(KeyCode::Left.into());
-        assert_eq!(composer.current_text(), "previous");
-        assert!(events.try_recv().is_err());
+        if cfg!(feature = "custom-agents-overview") {
+            assert!(composer.footer_props().key_hints.agents.is_some());
+            composer.handle_key_event(agents_shortcut_key());
+            assert_matches!(events.try_recv(), Ok(AppEvent::OpenAgentsOverview));
+        } else {
+            assert!(composer.footer_props().key_hints.agents.is_none());
+            composer.handle_key_event(KeyCode::Left.into());
+            assert_eq!(composer.current_text(), "previous");
+            assert!(events.try_recv().is_err());
+        }
     }
 }

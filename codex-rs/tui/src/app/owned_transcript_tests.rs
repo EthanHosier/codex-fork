@@ -74,8 +74,21 @@ pub(in crate::app) fn buffer_text(buffer: &Buffer) -> String {
         .join("\n")
 }
 
-#[tokio::test]
-async fn external_writer_escape_returns_to_command_center_without_editing() -> Result<()> {
+#[test]
+fn external_writer_escape_returns_to_command_center_without_editing() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(external_writer_escape_returns_to_command_center_without_editing_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("external writer Escape test thread panicked"))?
+}
+
+async fn external_writer_escape_returns_to_command_center_without_editing_inner() -> Result<()> {
     for (detailed, scrolled, offline) in [
         (false, false, false),
         (false, true, false),
