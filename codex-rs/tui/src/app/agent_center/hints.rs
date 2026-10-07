@@ -42,7 +42,15 @@ impl AgentsOverviewView {
     }
 
     pub(super) fn center_filter_hint(&self) -> String {
-        [key_hint::plain(KeyCode::Tab), key_hint::shift(KeyCode::Tab)]
+        let hints = if cfg!(feature = "custom-agents-overview") {
+            [
+                key_hint::plain(KeyCode::Left),
+                key_hint::plain(KeyCode::Right),
+            ]
+        } else {
+            [key_hint::plain(KeyCode::Tab), key_hint::shift(KeyCode::Tab)]
+        };
+        hints
             .into_iter()
             .filter(|hint| {
                 let (code, modifiers) = hint.parts();

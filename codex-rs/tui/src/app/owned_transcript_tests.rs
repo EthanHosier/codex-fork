@@ -137,7 +137,11 @@ async fn external_writer_escape_returns_to_command_center_without_editing_inner(
             assert!(app.agents_overview.request_id.is_none());
             assert!(app.reconnect.presentation == reconnect::ReconnectPresentation::Overview);
             insta::assert_snapshot!(
-                "external_writer_escape_offline_command_center",
+                if cfg!(feature = "custom-agents-overview") {
+                    "external_writer_escape_offline_command_center_arrow_filters"
+                } else {
+                    "external_writer_escape_offline_command_center"
+                },
                 crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(
                     crate::chatwidget::tests::helpers::render_bottom_popup(
                         &app.chat_widget,
@@ -147,7 +151,11 @@ async fn external_writer_escape_returns_to_command_center_without_editing_inner(
             );
         } else if !detailed && !scrolled {
             insta::assert_snapshot!(
-                "external_writer_escape_command_center",
+                if cfg!(feature = "custom-agents-overview") {
+                    "external_writer_escape_command_center_arrow_filters"
+                } else {
+                    "external_writer_escape_command_center"
+                },
                 crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(
                     crate::chatwidget::tests::helpers::render_bottom_popup(
                         &app.chat_widget,

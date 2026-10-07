@@ -89,16 +89,30 @@ impl AgentsOverviewView {
             state.help = !state.help;
             return true;
         }
-        if key.code == KeyCode::Tab
+        let filter_step = if cfg!(feature = "custom-agents-overview") {
+            if key.modifiers.is_empty() {
+                match key.code {
+                    KeyCode::Left => Some(TASK_FILTERS.len() - 1),
+                    KeyCode::Right => Some(1),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        } else if key.code == KeyCode::Tab
             && !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
-            let step = if key.modifiers.contains(KeyModifiers::SHIFT) {
+            Some(if key.modifiers.contains(KeyModifiers::SHIFT) {
                 TASK_FILTERS.len() - 1
             } else {
                 1
-            };
+            })
+        } else {
+            None
+        };
+        if let Some(step) = filter_step {
             state.status_filter = (state.status_filter + step) % TASK_FILTERS.len();
             state.scroll = 0;
             drop(state);

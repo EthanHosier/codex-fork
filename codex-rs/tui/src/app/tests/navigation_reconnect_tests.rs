@@ -407,7 +407,11 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             let history = drain_history(&mut app, &mut tui, &mut session, &mut events).await?;
             assert!(history.contains("Unsubmitted title: Keep this task draft!"));
             assert_snapshot!(
-                "daemon_command_center_vanished_rename",
+                if cfg!(feature = "custom-agents-overview") {
+                    "daemon_command_center_vanished_rename_arrow_filters"
+                } else {
+                    "daemon_command_center_vanished_rename"
+                },
                 render_bottom_popup(&app.chat_widget, /*width*/ 100)
             );
             app.handle_tui_event(

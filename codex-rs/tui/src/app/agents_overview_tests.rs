@@ -9,6 +9,14 @@ use super::*;
 use crate::app::tests::make_test_app_with_channels;
 use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
 
+fn filter_hint_snapshot_name(name: &str) -> String {
+    if cfg!(feature = "custom-agents-overview") {
+        format!("{name}_arrow_filters")
+    } else {
+        name.to_string()
+    }
+}
+
 #[tokio::test]
 async fn overview_worktree_creation_busy_state() {
     let mut app = make_test_app().await;
@@ -918,7 +926,7 @@ async fn agents_overview_details_render_markdown() {
         .unwrap();
     let cached = terminal.backend().to_string();
     insta::assert_snapshot!(
-        "agents_overview_markdown",
+        filter_hint_snapshot_name("agents_overview_markdown"),
         normalize_agent_center_snapshot(&cached)
     );
 
@@ -955,7 +963,7 @@ async fn agents_overview_details_render_markdown() {
     app.chat_widget.show_bottom_pane_view(Box::new(view));
 
     insta::assert_snapshot!(
-        "agents_overview_markdown_long_lines",
+        filter_hint_snapshot_name("agents_overview_markdown_long_lines"),
         normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, /*width*/ 96))
     );
 
@@ -966,7 +974,7 @@ async fn agents_overview_details_render_markdown() {
     let view = app.agents_overview_view(vec![thread], Some(thread_id));
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     insta::assert_snapshot!(
-        "agents_overview_markdown_table",
+        filter_hint_snapshot_name("agents_overview_markdown_table"),
         normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, /*width*/ 96))
     );
 }
@@ -1252,7 +1260,7 @@ async fn overview_model_grouping_shows_details_and_preserves_selection() {
     }
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     insta::assert_snapshot!(
-        "agents_overview_model_grouping",
+        filter_hint_snapshot_name("agents_overview_model_grouping"),
         render_bottom_popup(&app.chat_widget, /*width*/ 100)
             .replace(&test_path_display("/tmp/project"), "/tmp/project")
             .replace("fwd del", "del")

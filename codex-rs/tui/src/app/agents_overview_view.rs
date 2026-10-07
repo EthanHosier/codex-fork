@@ -220,7 +220,12 @@ impl AgentsOverviewView {
             .map(|row| AgentsOverviewProjectGroup::for_thread(&row.thread, worktrees_enabled))
             .collect();
         let center_shortcut_keys = crate::keymap::keymap_action_ids()
-            .filter(|action| matches!(action.context, KeymapContext::List | KeymapContext::Agents))
+            .filter(|action| {
+                matches!(action.context, KeymapContext::List | KeymapContext::Agents)
+                    && !(cfg!(feature = "custom-agents-overview")
+                        && action.context == KeymapContext::List
+                        && matches!(action.action, "move_left" | "move_right"))
+            })
             .flat_map(|action| {
                 crate::keymap::bindings_for_action(
                     &keymap,
