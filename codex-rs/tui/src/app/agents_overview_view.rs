@@ -763,6 +763,7 @@ impl BottomPaneView for AgentsOverviewView {
                 ListAction::PageUp | ListAction::PageDown => {
                     self.page_selection(action);
                 }
+                #[cfg(not(feature = "custom-agents-overview"))]
                 ListAction::MoveRight if !self.state().editing_metadata() => self.activate(),
                 ListAction::MoveLeft | ListAction::MoveRight => {}
             }

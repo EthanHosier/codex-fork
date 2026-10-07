@@ -161,6 +161,7 @@ static OVERVIEW_TIMESTAMP: std::sync::LazyLock<i64> =
     std::sync::LazyLock::new(|| chrono::Utc::now().timestamp() - 120);
 
 #[tokio::test]
+#[cfg(not(feature = "custom-agents-overview"))]
 async fn overview_right_opens_current_or_highlighted_task() {
     let mut app = make_test_app().await;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2477,8 +2478,21 @@ async fn command_center_handles_resume_failure_and_success() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<()> {
+#[test]
+fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(command_center_attach_conflict_opens_read_only_and_retries_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("command center attach test thread panicked"))?
+}
+
+async fn command_center_attach_conflict_opens_read_only_and_retries_inner() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     trust_fixture_folders(&mut app);
     std::fs::write(
@@ -2571,7 +2585,7 @@ async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<
         app.runtime_approval_policy_override,
         app.runtime_permission_profile_override.clone(),
     );
-    app.chat_widget.handle_key_event(KeyCode::Right.into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
     let event = rx.try_recv()?;
     assert!(
         matches!(event, AppEvent::SelectAgentsOverviewThread { thread_id: id } if id == thread_id)
@@ -2599,8 +2613,13 @@ async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<
         insta::assert_snapshot!("agents_overview_attach_conflict", render_bottom_popup(&app.chat_widget, /*width*/ 96));
     });
 
-    for key in [KeyCode::Left, KeyCode::Esc] {
-        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
+    let (agents_key, agents_modifiers) =
+        crate::bottom_pane::agents_navigation_shortcut_key().parts();
+    for key in [
+        KeyEvent::new(agents_key, agents_modifiers),
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    ] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
         assert_eq!(
             app.chat_widget
                 .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID),
