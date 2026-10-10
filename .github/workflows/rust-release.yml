@@ -5,8 +5,7 @@
 # git push origin rust-v0.1.0
 # ```
 #
-# Tag releases sign macOS binaries and DMGs through the protected `codesigning`
-# GitHub environment and Azure Key Vault before final verification on macOS.
+# This fork currently publishes Linux release assets only.
 
 name: rust-release
 on:
@@ -78,56 +77,30 @@ jobs:
       matrix:
         build-system: [cargo, bazel]
         target:
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
           - x86_64-unknown-linux-musl
           - aarch64-unknown-linux-musl
         bundle: [primary, app-server]
         include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            bundle: primary
-            artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
-            build_dmg: "true"
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            bundle: app-server
-            artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
-            build_dmg: "false"
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            bundle: primary
-            artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
-            build_dmg: "true"
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            bundle: app-server
-            artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
-            build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
-          - runner: ${{ github.event.repository.name }}-linux-x64-xl
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
             binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-x64-xl
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
             binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-arm64
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
             binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
             build_dmg: "false"
-          - runner: ${{ github.event.repository.name }}-linux-arm64
+          - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
@@ -564,6 +537,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-macos-voice:
+    if: ${{ false }}
     needs: tag-check
     name: Build voice runtime - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -622,7 +596,7 @@ jobs:
 
   sign-macos-binaries:
     needs: [build, build-macos-voice]
-    if: ${{ always() && needs.build.result == 'success' && needs.build-macos-voice.result == 'success' }}
+    if: ${{ false }}
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
     continue-on-error: ${{ matrix.build-system == 'bazel' }}
     runs-on: ubuntu-latest
@@ -868,6 +842,7 @@ jobs:
           if-no-files-found: warn
 
   package-macos:
+    if: ${{ false }}
     needs: sign-macos-binaries
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }} - ${{ matrix.build-system }}
     continue-on-error: ${{ matrix.build-system == 'bazel' }}
@@ -1152,6 +1127,7 @@ jobs:
           if-no-files-found: error
 
   sign-macos-dmg:
+    if: ${{ false }}
     needs: package-macos
     name: Sign macOS DMG - ${{ matrix.target }} - ${{ matrix.build-system }}
     continue-on-error: ${{ matrix.build-system == 'bazel' }}
@@ -1255,6 +1231,7 @@ jobs:
           if-no-files-found: warn
 
   finalize-macos:
+    if: ${{ false }}
     needs:
       - package-macos
       - sign-macos-dmg
@@ -1513,7 +1490,7 @@ jobs:
   # Desktop consumes the versioned codex-provisioned manifest from this release.
   provisioned-macos-candidate:
     needs: finalize-macos
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v') && vars.CODEX_PROVISIONED_MACOS_CANDIDATE == 'true'
+    if: ${{ false }}
     permissions:
       contents: read
       id-token: write
@@ -1521,6 +1498,7 @@ jobs:
     secrets: inherit
 
   build-windows:
+    if: ${{ false }}
     needs: tag-check
     permissions:
       contents: read
@@ -1533,7 +1511,7 @@ jobs:
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
     with:
-      publish: true
+      publish: false
 
   stage-npm-packages:
     name: stage npm packages
@@ -1541,6 +1519,7 @@ jobs:
       - build
       - finalize-macos
       - build-windows
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1597,23 +1576,13 @@ jobs:
     needs:
       - tag-check
       - build
-      - finalize-macos
-      - build-windows
       - argument-comment-lint-release-assets
-      - stage-npm-packages
-      - provisioned-macos-candidate
     if: >-
       ${{
         always() &&
         needs.tag-check.result == 'success' &&
         needs.build.result == 'success' &&
-        needs.finalize-macos.result == 'success' &&
-        needs.build-windows.result == 'success' &&
-        needs.argument-comment-lint-release-assets.result == 'success' &&
-        needs.stage-npm-packages.result == 'success' &&
-        (needs.provisioned-macos-candidate.result == 'success' ||
-          (vars.CODEX_PROVISIONED_MACOS_CANDIDATE != 'true' &&
-            needs.provisioned-macos-candidate.result == 'skipped'))
+        needs.argument-comment-lint-release-assets.result == 'success'
       }}
     name: release
     runs-on: ubuntu-latest
@@ -1714,8 +1683,17 @@ jobs:
             echo "make_latest=false" >> $GITHUB_OUTPUT
             echo "prerelease=true" >> $GITHUB_OUTPUT
           else
-            make_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
-              | python3 .github/scripts/releases.py "$version" --check-github latest)"
+            latest_status=0
+            latest_release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" 2>&1)" || latest_status=$?
+            if [[ "$latest_status" -ne 0 ]] && grep -q 'HTTP 404' <<< "$latest_release"; then
+              make_latest=true
+            elif [[ "$latest_status" -ne 0 ]]; then
+              printf '%s\n' "$latest_release" >&2
+              exit "$latest_status"
+            else
+              make_latest="$(printf '%s' "$latest_release" \
+                | python3 .github/scripts/releases.py "$version" --check-github latest)"
+            fi
             echo "make_latest=${make_latest}" >> $GITHUB_OUTPUT
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
@@ -1742,7 +1720,6 @@ jobs:
       - name: Stage installer scripts
         run: |
           cp scripts/install/install.sh dist/install.sh
-          mv dist/x86_64-pc-windows-msvc/install.ps1 dist/install.ps1
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
