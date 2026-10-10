@@ -958,6 +958,10 @@ pub struct Tui {
     #[serde(default)]
     pub agents_overview_grouping: AgentsOverviewGrouping,
 
+    /// Thread IDs manually added to the TUI's My Agents view.
+    #[serde(default)]
+    pub my_agents: Vec<String>,
+
     /// Working directory to use when resuming or forking a session.
     /// When unset, prompt if the current and session directories differ.
     #[serde(default)]

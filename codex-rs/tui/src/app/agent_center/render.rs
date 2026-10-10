@@ -164,7 +164,13 @@ impl Renderable for AgentsOverviewView {
                 let count = self
                     .rows
                     .iter()
-                    .filter(|row| group.is_none_or(|group| group == row.group))
+                    .filter(|row| {
+                        #[cfg(feature = "custom-agents-overview")]
+                        if *label == "My agents" {
+                            return self.my_agents.contains(&row.thread_id);
+                        }
+                        group.is_none_or(|group| group == row.group)
+                    })
                     .count();
                 format!("{label} {count}")
             })

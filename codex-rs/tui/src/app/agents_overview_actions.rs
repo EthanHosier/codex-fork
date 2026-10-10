@@ -421,6 +421,78 @@ impl App {
 
         Ok(())
     }
+
+    #[cfg(feature = "custom-agents-overview")]
+    pub(super) fn confirm_remove_my_agent(&mut self, thread_id: ThreadId) {
+        let name = self
+            .agents_overview
+            .threads
+            .get(&thread_id)
+            .and_then(Option::as_ref)
+            .and_then(|thread| thread.name.as_deref())
+            .unwrap_or("this agent");
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            header: Box::new(LifecycleHeader(vec![
+                format!("Remove “{name}” from My agents?").bold().into(),
+                "Its thread and history will remain available in All."
+                    .dim()
+                    .into(),
+            ])),
+            items: vec![
+                SelectionItem {
+                    name: "Cancel".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Remove from My agents".to_string(),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::RemoveMyAgent { thread_id })
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..SelectionViewParams::confirmation()
+        });
+    }
+
+    #[cfg(feature = "custom-agents-overview")]
+    pub(super) async fn remove_my_agent(&mut self, thread_id: ThreadId) {
+        let thread_id_string = thread_id.to_string();
+        let mut remaining = self.local_settings.tui.my_agents.clone();
+        remaining.retain(|id| id != &thread_id_string);
+        if let Err(error) = self
+            .persist_my_agents_config(self.local_settings.user_config_path.as_path(), &remaining)
+            .await
+        {
+            self.add_agents_overview_error(format!("Failed to update My agents: {error}"));
+            return;
+        }
+        self.local_settings.tui.my_agents = remaining;
+        self.config.tui_my_agents = self.local_settings.tui.my_agents.clone();
+        self.repaint_agents_overview();
+    }
+
+    #[cfg(feature = "custom-agents-overview")]
+    pub(super) async fn persist_my_agents_config(
+        &self,
+        config_path: &std::path::Path,
+        thread_ids: &[String],
+    ) -> anyhow::Result<()> {
+        let mut values = toml_edit::Array::new();
+        for id in thread_ids {
+            values.push(id.as_str());
+        }
+        let edit = crate::legacy_core::config::edit::ConfigEdit::SetPath {
+            segments: vec!["tui".into(), "my_agents".into()],
+            value: toml_edit::value(values),
+        };
+        crate::legacy_core::config::edit::ConfigEditsBuilder::for_config_path(config_path)
+            .with_edits([edit])
+            .apply()
+            .await
+    }
 }
 
 #[cfg(test)]

@@ -116,6 +116,10 @@ impl App {
         )>,
         mut startup_draft: Option<&mut StartupDraftPump>,
     ) -> Result<AppRunControl> {
+        #[cfg(feature = "custom-agents-overview")]
+        let add_to_my_agents = name.is_some();
+        #[cfg(feature = "custom-agents-overview")]
+        let my_agents_config_path = self.local_settings.user_config_path.clone();
         if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
             if let Some((_, checkout)) = &managed_worktree {
                 self.agents_overview_retained_worktree_error(
@@ -240,6 +244,26 @@ impl App {
                     checkout,
                     "Could not open the new session.",
                 );
+            }
+        }
+        #[cfg(feature = "custom-agents-overview")]
+        if add_to_my_agents && self.current_displayed_thread_id() == Some(thread_id) {
+            let id = thread_id.to_string();
+            if !self.local_settings.tui.my_agents.contains(&id) {
+                let mut my_agents = self.local_settings.tui.my_agents.clone();
+                my_agents.push(id);
+                match self
+                    .persist_my_agents_config(my_agents_config_path.as_path(), &my_agents)
+                    .await
+                {
+                    Ok(()) => {
+                        self.local_settings.tui.my_agents = my_agents.clone();
+                        self.config.tui_my_agents = my_agents;
+                    }
+                    Err(error) => self.add_agents_overview_error(format!(
+                        "The new agent was created, but could not be added to My agents: {error}"
+                    )),
+                }
             }
         }
         Ok(control)

@@ -80,6 +80,7 @@ impl LocalSettings {
                 pet_anchor: config.tui_pet_anchor,
                 session_picker_view: Some(config.tui_session_picker_view),
                 agents_overview_grouping: config.tui_agents_overview_grouping,
+                my_agents: config.tui_my_agents.clone(),
                 resume_cwd: config.tui_resume_cwd,
                 keymap: config.tui_keymap.clone(),
                 model_availability_nux: config.model_availability_nux.clone(),
@@ -194,6 +195,11 @@ impl LocalSettings {
         let mut settings = Self::from(config);
         settings.transcript_mode = self.transcript_mode;
         settings.tui.alternate_screen = self.tui.alternate_screen;
+        #[cfg(feature = "custom-agents-overview")]
+        {
+            settings.tui.my_agents = self.tui.my_agents.clone();
+            settings.user_config_path = self.user_config_path.clone();
+        }
         settings
     }
 

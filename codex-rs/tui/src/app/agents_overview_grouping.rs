@@ -28,6 +28,8 @@ impl AgentsOverviewView {
         let state = self.state();
         let search = state.search.to_lowercase();
         let (_, status_group) = super::command_center::TASK_FILTERS[state.status_filter];
+        #[cfg(feature = "custom-agents-overview")]
+        let my_agents_filter = state.status_filter == 0;
         let (mut pinned, mut visible): (Vec<_>, Vec<_>) = self
             .rows
             .iter()
@@ -41,8 +43,13 @@ impl AgentsOverviewView {
                 )
                 .to_lowercase();
                 ((search.is_empty() || searchable.contains(&search))
-                    && (state.rename_target == Some(row.thread_id)
-                        || status_group.is_none_or(|group| group == row.group)))
+                    && (state.rename_target == Some(row.thread_id) || {
+                        #[cfg(feature = "custom-agents-overview")]
+                        if my_agents_filter {
+                            return self.my_agents.contains(&row.thread_id).then_some(index);
+                        }
+                        status_group.is_none_or(|group| group == row.group)
+                    }))
                 .then_some(index)
             })
             .partition(|index| self.is_pinned(*index));

@@ -155,6 +155,57 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
     }
 }
 
+#[cfg(feature = "custom-agents-overview")]
+#[tokio::test]
+async fn d_confirms_removing_a_my_agent_without_deleting_its_thread() -> Result<()> {
+    let (mut app, mut rx, _op_rx) = crate::app::tests::make_test_app_with_channels().await;
+    let id = ThreadId::from_u128(/*value*/ 420);
+    app.local_settings.tui.my_agents = vec![id.to_string()];
+    app.agents_overview.threads.insert(
+        id,
+        Some(overview_thread(
+            id,
+            /*parent_thread_id*/ None,
+            "Named agent",
+            ThreadStatus::Idle,
+        )),
+    );
+    let mut view = app.agents_overview_view(
+        vec![
+            app.agents_overview.threads[&id]
+                .as_ref()
+                .expect("thread fixture")
+                .clone(),
+        ],
+        Some(id),
+    );
+    assert!(view.my_agents.contains(&id));
+    app.agents_overview.visible_thread_ids = view.thread_ids();
+    view.handle_key_event(KeyCode::Down.into());
+    view.handle_key_event(KeyCode::Char('d').into());
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let prompt = rx
+        .try_recv()
+        .expect("d should open the remove-from-view prompt");
+    Box::pin(app.handle_event(&mut tui, &mut app_server, prompt)).await?;
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 96).contains("Remove from My agents"));
+
+    // The confirmation view offers Cancel first and Remove second.
+    app.chat_widget.handle_key_event(KeyCode::Down.into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    }
+    assert!(!app.local_settings.tui.my_agents.contains(&id.to_string()));
+    assert!(app.agents_overview.threads.contains_key(&id));
+
+    app_server.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn archiving_selects_the_next_displayed_task() -> Result<()> {
     for action in [AgentsOverviewAction::Archive, AgentsOverviewAction::Delete] {

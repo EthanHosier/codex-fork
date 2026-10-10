@@ -2936,6 +2936,14 @@ impl App {
                 self.agents_overview.hidden_threads.insert(thread_id);
                 self.repaint_agents_overview();
             }
+            #[cfg(feature = "custom-agents-overview")]
+            AppEvent::ConfirmRemoveMyAgent { thread_id } => {
+                self.confirm_remove_my_agent(thread_id);
+            }
+            #[cfg(feature = "custom-agents-overview")]
+            AppEvent::RemoveMyAgent { thread_id } => {
+                self.remove_my_agent(thread_id).await;
+            }
             AppEvent::ConfirmAgentsOverviewAction { thread_id, action } => {
                 self.confirm_agents_overview_action(thread_id, action);
             }

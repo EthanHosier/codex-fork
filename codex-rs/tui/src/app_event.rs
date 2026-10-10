@@ -380,6 +380,16 @@ pub(crate) enum AppEvent {
     HideAgentsOverviewThread {
         thread_id: ThreadId,
     },
+    /// Ask whether to remove a task from the client-local My agents tab.
+    #[cfg(feature = "custom-agents-overview")]
+    ConfirmRemoveMyAgent {
+        thread_id: ThreadId,
+    },
+    /// Remove a task from the client-local My agents tab without deleting its history.
+    #[cfg(feature = "custom-agents-overview")]
+    RemoveMyAgent {
+        thread_id: ThreadId,
+    },
     /// Confirm a server lifecycle action for the selected dashboard task.
     ConfirmAgentsOverviewAction {
         thread_id: ThreadId,

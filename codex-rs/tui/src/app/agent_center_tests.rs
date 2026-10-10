@@ -401,6 +401,45 @@ async fn live_center_navigation_and_complete_hints() {
     assert!(view.is_complete());
 }
 
+#[cfg(feature = "custom-agents-overview")]
+#[tokio::test]
+async fn my_agents_is_default_and_filters_by_persisted_membership() {
+    let mut app = make_test_app().await;
+    let mine = ThreadId::from_u128(/*value*/ 420);
+    let ordinary = ThreadId::from_u128(/*value*/ 421);
+    app.local_settings.tui.my_agents = vec![mine.to_string()];
+    let mut named = overview_thread(
+        mine,
+        /*parent_thread_id*/ None,
+        "Named agent",
+        ThreadStatus::Idle,
+    );
+    named.name = Some("Named agent".to_string());
+    let ordinary_thread = overview_thread(
+        ordinary,
+        /*parent_thread_id*/ None,
+        "Ordinary session",
+        ThreadStatus::Idle,
+    );
+    let view = app.agents_overview_view(vec![named, ordinary_thread], Some(mine));
+
+    let my_agents = screen(&view, /*width*/ 100, /*height*/ 18);
+    assert!(my_agents.contains("My agents 1"), "{my_agents}");
+    assert!(!my_agents.contains("Inactive"), "{my_agents}");
+    assert!(my_agents.contains("Named agent"), "{my_agents}");
+    assert!(!my_agents.contains("Ordinary session"), "{my_agents}");
+
+    let mut view = view;
+    // My agents is the default; All is the final tab after the status tabs.
+    for _ in 0..4 {
+        view.handle_key_event(KeyCode::Right.into());
+    }
+    let all = screen(&view, /*width*/ 100, /*height*/ 18);
+    assert!(all.contains("All 2"), "{all}");
+    assert!(all.contains("Named agent"), "{all}");
+    assert!(all.contains("Ordinary session"), "{all}");
+}
+
 #[tokio::test]
 async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
     let mut app = make_test_app().await;

@@ -10,11 +10,17 @@ use super::*;
 
 // Counts and filtering use the same status groups.
 pub(super) const TASK_FILTERS: &[(&str, Option<AgentsOverviewGroup>)] = &[
+    #[cfg(feature = "custom-agents-overview")]
+    ("My agents", None),
+    #[cfg(not(feature = "custom-agents-overview"))]
     ("All", None),
     ("Needs you", Some(AgentsOverviewGroup::NeedsYou)),
     ("Working", Some(AgentsOverviewGroup::Working)),
     ("Ready", Some(AgentsOverviewGroup::Ready)),
+    #[cfg(not(feature = "custom-agents-overview"))]
     ("Inactive", Some(AgentsOverviewGroup::Finished)),
+    #[cfg(feature = "custom-agents-overview")]
+    ("All", None),
 ];
 
 impl AgentsOverviewView {

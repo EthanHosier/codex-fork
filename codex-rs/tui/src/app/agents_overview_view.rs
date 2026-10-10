@@ -187,6 +187,8 @@ impl AgentsOverviewViewState {
 pub(super) struct AgentsOverviewView {
     use_theme_colors: bool,
     pub(super) rows: Vec<AgentsOverviewRow>,
+    #[cfg(feature = "custom-agents-overview")]
+    pub(super) my_agents: std::collections::HashSet<ThreadId>,
     project_groups: Vec<AgentsOverviewProjectGroup>,
     pub(super) pinned_thread_ranks: Option<HashMap<ThreadId, usize>>,
     pub(super) pin_action_pending: bool,
@@ -264,6 +266,8 @@ impl AgentsOverviewView {
             editor_keymap: keymap.clone(),
             use_theme_colors,
             rows,
+            #[cfg(feature = "custom-agents-overview")]
+            my_agents: std::collections::HashSet::new(),
             project_groups,
             pinned_thread_ranks: None,
             pin_action_pending: false,
@@ -625,6 +629,22 @@ impl BottomPaneView for AgentsOverviewView {
             return;
         }
         if self.name_input_key(key) || self.command_center_key(key) {
+            return;
+        }
+        #[cfg(feature = "custom-agents-overview")]
+        if key.code == KeyCode::Char('d')
+            && key.modifiers.is_empty()
+            && !self.state().editing_metadata()
+            && self.state().status_filter == 0
+        {
+            if let Some(row) = self
+                .selected_row()
+                .filter(|row| self.my_agents.contains(&row.thread_id))
+            {
+                self.app_event_tx.send(AppEvent::ConfirmRemoveMyAgent {
+                    thread_id: row.thread_id,
+                });
+            }
             return;
         }
         if key.code == KeyCode::Backspace
