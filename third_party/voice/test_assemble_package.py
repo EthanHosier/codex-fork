@@ -162,7 +162,7 @@ class AssembleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "required libraries"):
                     runtime_files(root.resolve(), target)
 
-    def test_alpha_package_preserves_release_version_and_matching_build(self):
+    def test_alpha_package_allows_release_tag_to_differ_from_package_version(self):
         self.commit = "b" * 40
         target = "aarch64-apple-darwin"
         runtime, _ = self.make_runtime(target, "plugins/libgst{}.dylib")
@@ -202,17 +202,23 @@ class AssembleTests(unittest.TestCase):
         )
 
         self.output.rename(self.root / "previous output")
-        with self.assertRaisesRegex(ValueError, "package version"):
-            assemble(
-                self.package,
-                self.helper,
-                target,
-                self.commit,
-                self.output,
-                runtime=staged,
-                release_version="0.154.0-alpha.7",
-            )
+        assemble(
+            self.package,
+            self.helper,
+            target,
+            self.commit,
+            self.output,
+            runtime=staged,
+            release_version="0.154.0-alpha.7",
+        )
+        mismatch_manifest = json.loads(
+            (self.output / "codex-resources/voice/manifest.json").read_text()
+        )
+        # The GitHub release tag may intentionally differ from the package's
+        # embedded Cargo version. Keep the actual built version in the manifest.
+        self.assertEqual(mismatch_manifest["appVersion"], "0.154.0-alpha.8")
 
+        self.output.rename(self.root / "tagged output")
         with self.assertRaisesRegex(ValueError, "runtime receipt"):
             assemble(
                 self.package,

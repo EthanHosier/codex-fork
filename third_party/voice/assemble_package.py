@@ -69,9 +69,8 @@ def assemble(
             r"[0-9]+\.[0-9]+\.[0-9]+(?:-alpha(?:\.[0-9]+){0,2}|-beta(?:\.[0-9]+)?)?",
             release_version,
         )
-        or metadata["version"] != release_version
     ):
-        raise ValueError("package version does not match the release")
+        raise ValueError("invalid release version")
     if (package / "codex-resources/voice").exists():
         raise ValueError("input already contains voice resources")
     for path in package.rglob("*"):
