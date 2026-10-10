@@ -297,6 +297,14 @@ impl App {
             }
         });
         let mut thread_ids = std::mem::take(&mut self.agents_overview.refresh_thread_ids);
+        #[cfg(feature = "custom-agents-overview")]
+        if !initialized {
+            for id in &self.local_settings.tui.my_agents {
+                if let Ok(id) = ThreadId::from_string(id) {
+                    thread_ids.insert(id);
+                }
+            }
+        }
         self.agents_overview.active_refresh_thread_ids = thread_ids.clone();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();

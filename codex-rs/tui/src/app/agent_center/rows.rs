@@ -161,7 +161,19 @@ impl AgentsOverviewView {
                     })
                     .count();
                 let total = (0..self.rows.len())
-                    .filter(|&candidate| self.same_group(state.grouping, candidate, index))
+                    .filter(|&candidate| {
+                        self.same_group(state.grouping, candidate, index) && {
+                            #[cfg(feature = "custom-agents-overview")]
+                            {
+                                state.status_filter != 0
+                                    || self.my_agents.contains(&self.rows[candidate].thread_id)
+                            }
+                            #[cfg(not(feature = "custom-agents-overview"))]
+                            {
+                                true
+                            }
+                        }
+                    })
                     .count();
                 let count = if count == total {
                     count.to_string()

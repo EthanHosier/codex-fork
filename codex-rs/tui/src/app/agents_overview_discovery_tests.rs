@@ -13,6 +13,85 @@ use std::sync::atomic::Ordering;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
+#[cfg(feature = "custom-agents-overview")]
+#[test]
+fn initial_refresh_reads_saved_my_agents_outside_the_first_history_page() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(
+                    initial_refresh_reads_saved_my_agents_outside_the_first_history_page_inner(),
+                )
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("Saved My agents refresh test thread panicked"))?
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn initial_refresh_reads_saved_my_agents_outside_the_first_history_page_inner() -> Result<()>
+{
+    let mut app = Box::pin(make_test_app()).await;
+    let saved_id = ThreadId::from_u128(/*value*/ 900);
+    let saved_thread = overview_thread(
+        saved_id,
+        /*parent_thread_id*/ None,
+        "Saved agent beyond first page",
+        ThreadStatus::NotLoaded,
+    );
+    app.local_settings.tui.my_agents = vec![saved_id.to_string()];
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = crate::resolve_remote_addr(&format!("ws://{}", listener.local_addr()?))?;
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        let mut socket = tokio_tungstenite::accept_async(stream).await?;
+        while let Some(Ok(Message::Text(text))) = socket.next().await {
+            let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
+                continue;
+            };
+            let params = request.params.unwrap_or_default();
+            let result = match request.method.as_str() {
+                "initialize" => json!({"userAgent": "overview-test/1.0"}),
+                "thread/loaded/list" => json!({"data": [], "nextCursor": null}),
+                "thread/list" => json!({"data": [], "nextCursor": null}),
+                "thread/read" => {
+                    assert_eq!(params["threadId"], saved_thread.id);
+                    json!({"thread": saved_thread})
+                }
+                "thread/turns/list" => json!({"data": [], "nextCursor": null}),
+                method => panic!("unexpected request: {method}"),
+            };
+            socket
+                .send(Message::Text(
+                    json!({"id": request.id, "result": result})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+        }
+        Ok::<_, color_eyre::Report>(())
+    });
+    let session = AppServerSession::new(
+        crate::connect_remote_app_server(endpoint).await?,
+        ThreadParamsMode::Remote,
+    );
+    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    app.refresh_agents_overview_threads(&session);
+    finish_overview_refresh(&mut app, &session, &mut rx).await;
+    let loaded_saved_agent = app.agents_overview.threads.contains_key(&saved_id);
+
+    session.shutdown().await?;
+    server.await??;
+    assert!(loaded_saved_agent);
+    Ok(())
+}
+
 #[tokio::test]
 async fn overview_show_more_refills_archived_rows_and_retries_without_losing_rows() -> Result<()> {
     check_discovery(/*mixed_sources*/ false).await?;

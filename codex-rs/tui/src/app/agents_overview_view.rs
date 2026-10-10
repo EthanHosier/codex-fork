@@ -370,7 +370,7 @@ impl AgentsOverviewView {
                 return;
             }
         }
-        if self.selected == usize::MAX && self.state().has_more {
+        if self.selected == usize::MAX && self.can_show_more() {
             if !self.state().loading {
                 self.state().loading = true;
                 self.app_event_tx.send(AppEvent::ShowMoreAgentsOverview);

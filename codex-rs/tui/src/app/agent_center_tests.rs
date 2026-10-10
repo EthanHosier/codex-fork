@@ -452,9 +452,114 @@ async fn my_agents_selects_first_agent_when_opened_without_a_current_selection_i
 }
 
 #[cfg(feature = "custom-agents-overview")]
-#[tokio::test]
-async fn my_agents_is_default_and_filters_by_persisted_membership() {
-    let mut app = make_test_app().await;
+#[test]
+fn my_agents_group_total_only_counts_saved_agents() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(my_agents_group_total_only_counts_saved_agents_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("My agents group count test thread panicked"))?
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn my_agents_group_total_only_counts_saved_agents_inner() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mine_one = ThreadId::from_u128(/*value*/ 430);
+    let mine_two = ThreadId::from_u128(/*value*/ 431);
+    app.local_settings.tui.my_agents = vec![mine_one.to_string(), mine_two.to_string()];
+    let threads = [
+        overview_thread(
+            mine_one,
+            /*parent_thread_id*/ None,
+            "My one",
+            ThreadStatus::Idle,
+        ),
+        overview_thread(
+            mine_two,
+            /*parent_thread_id*/ None,
+            "My two",
+            ThreadStatus::Idle,
+        ),
+        overview_thread(
+            ThreadId::from_u128(/*value*/ 432),
+            /*parent_thread_id*/ None,
+            "Other one",
+            ThreadStatus::Idle,
+        ),
+        overview_thread(
+            ThreadId::from_u128(/*value*/ 433),
+            /*parent_thread_id*/ None,
+            "Other two",
+            ThreadStatus::Idle,
+        ),
+    ];
+
+    let view = app.agents_overview_view(threads.into(), /*selected_thread_id*/ None);
+    let rendered = screen(&view, /*width*/ 100, /*height*/ 18);
+
+    assert!(rendered.contains("My agents 2"), "{rendered}");
+    assert!(!rendered.contains("of 4"), "{rendered}");
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
+#[test]
+fn my_agents_does_not_show_global_history_pagination() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(my_agents_does_not_show_global_history_pagination_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("My agents pagination test thread panicked"))?
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn my_agents_does_not_show_global_history_pagination_inner() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
+    let mine = ThreadId::from_u128(/*value*/ 440);
+    app.local_settings.tui.my_agents = vec![mine.to_string()];
+    app.agents_overview.view_state.lock().unwrap().has_more = true;
+    let thread = overview_thread(
+        mine,
+        /*parent_thread_id*/ None,
+        "My agent",
+        ThreadStatus::Idle,
+    );
+
+    let view = app.agents_overview_view(vec![thread], /*selected_thread_id*/ None);
+    let rendered = screen(&view, /*width*/ 100, /*height*/ 18);
+
+    assert!(!rendered.contains("Show more"), "{rendered}");
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
+#[test]
+fn my_agents_is_default_and_filters_by_persisted_membership() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(my_agents_is_default_and_filters_by_persisted_membership_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("My agents filter test thread panicked"))?
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn my_agents_is_default_and_filters_by_persisted_membership_inner() -> Result<()> {
+    let mut app = Box::pin(make_test_app()).await;
     let mine = ThreadId::from_u128(/*value*/ 420);
     let ordinary = ThreadId::from_u128(/*value*/ 421);
     app.local_settings.tui.my_agents = vec![mine.to_string()];
@@ -493,6 +598,7 @@ async fn my_agents_is_default_and_filters_by_persisted_membership() {
     assert!(all.contains("All 2"), "{all}");
     assert!(all.contains("Named agent"), "{all}");
     assert!(all.contains("Ordinary session"), "{all}");
+    Ok(())
 }
 
 #[tokio::test]
@@ -733,12 +839,30 @@ async fn overview_clears_voice_badge_after_async_close() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn live_center_show_more_navigation_search_and_loading() {
+#[test]
+fn live_center_show_more_navigation_search_and_loading() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("create test runtime")
+                .block_on(live_center_show_more_navigation_search_and_loading_inner())
+        })
+        .expect("spawn larger-stack test thread")
+        .join()
+        .expect("Show more test thread panicked");
+}
+
+async fn live_center_show_more_navigation_search_and_loading_inner() {
     let mut app = make_test_app().await;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     app.app_event_tx = AppEventSender::new(tx);
-    app.agents_overview.view_state.lock().unwrap().has_more = true;
+    {
+        let mut state = app.agents_overview.view_state.lock().unwrap();
+        state.has_more = true;
+    }
     let thread = overview_thread(
         ThreadId::new(),
         /*parent_thread_id*/ None,
@@ -746,6 +870,12 @@ async fn live_center_show_more_navigation_search_and_loading() {
         ThreadStatus::NotLoaded,
     );
     let mut view = app.agents_overview_view(vec![thread], /*selected_thread_id*/ None);
+    #[cfg(feature = "custom-agents-overview")]
+    for _ in 0..4 {
+        // My agents has no history pagination; test Show more on All instead.
+        view.handle_key_event(KeyCode::Right.into());
+    }
+    view.handle_key_event(KeyCode::Down.into());
     view.handle_key_event(KeyCode::Down.into());
     insta::assert_snapshot!(
         "live_center_show_more",
