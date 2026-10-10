@@ -75,11 +75,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-system: [cargo, bazel]
-        target:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-musl
-        bundle: [primary, app-server]
+        build-system: [cargo]
+        target: [x86_64-unknown-linux-musl]
+        bundle: [primary]
         include:
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ubuntu-24.04
@@ -87,24 +85,6 @@ jobs:
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
             binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
-            build_dmg: "false"
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-            bundle: app-server
-            artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
-            build_dmg: "false"
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            bundle: primary
-            artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
-            build_dmg: "false"
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            bundle: app-server
-            artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
             build_dmg: "false"
 
     steps:
