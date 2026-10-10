@@ -1763,7 +1763,7 @@ jobs:
   publish-r2-assets:
     name: publish-r2-assets
     needs: release
-    if: false
+    if: ${{ false }}
     permissions:
       contents: read
     uses: ./.github/workflows/r2-release.yml
@@ -1778,7 +1778,7 @@ jobs:
     concurrency: *release-publication
     name: publish-r2
     needs: [release, publish-dotslash, publish-r2-assets]
-    if: false
+    if: ${{ false }}
     permissions:
       contents: read
     uses: ./.github/workflows/r2-release.yml
@@ -1792,7 +1792,7 @@ jobs:
   publish-dotslash:
     name: publish-dotslash
     needs: release
-    if: false
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -1826,7 +1826,7 @@ jobs:
   publish-npm:
     concurrency: *release-publication
     # Publish to npm for stable releases, numbered alphas, and alpha hotfixes.
-    if: false
+    if: ${{ false }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -1993,7 +1993,7 @@ jobs:
     needs: release
     # Only trigger the deploy for a stable release.
     # The deploy updates developers.openai.com with the new config schema json file.
-    if: false
+    if: ${{ false }}
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions: {}
@@ -2018,7 +2018,7 @@ jobs:
     needs: release
     # Only publish stable/mainline releases to WinGet; pre-releases include a
     # '-' in the semver string (e.g., 1.2.3-alpha.1).
-    if: false
+    if: ${{ false }}
     # komac opens the winget-pkgs PR using the published Windows archives;
     # it runs on Linux and does not execute the Windows binaries.
     runs-on: ubuntu-latest
@@ -2072,7 +2072,7 @@ jobs:
   update-branch:
     concurrency: *release-publication
     name: Update latest-alpha-cli branch
-    if: false
+    if: ${{ false }}
     permissions:
       contents: write
     # R2 waits for the GitHub release and DotSlash release-asset uploads.
