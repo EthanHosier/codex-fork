@@ -402,6 +402,56 @@ async fn live_center_navigation_and_complete_hints() {
 }
 
 #[cfg(feature = "custom-agents-overview")]
+#[test]
+fn my_agents_selects_first_agent_when_opened_without_a_current_selection() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(
+                    my_agents_selects_first_agent_when_opened_without_a_current_selection_inner(),
+                )
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("My agents selection test thread panicked"))?
+}
+
+async fn my_agents_selects_first_agent_when_opened_without_a_current_selection_inner() -> Result<()>
+{
+    let mut app = Box::pin(make_test_app()).await;
+    let mine = ThreadId::from_u128(/*value*/ 420);
+    let ordinary = ThreadId::from_u128(/*value*/ 421);
+    app.local_settings.tui.my_agents = vec![mine.to_string()];
+    let mut named = overview_thread(
+        mine,
+        /*parent_thread_id*/ None,
+        "Named agent",
+        ThreadStatus::Idle,
+    );
+    named.name = Some("Named agent".to_string());
+    let ordinary_thread = overview_thread(
+        ordinary,
+        /*parent_thread_id*/ None,
+        "Ordinary session",
+        ThreadStatus::Idle,
+    );
+
+    let view = app.agents_overview_view(
+        vec![named, ordinary_thread],
+        /*selected_thread_id*/ None,
+    );
+    let selected = view
+        .selected_index()
+        .and_then(|index| view.rows.get(index))
+        .map(|row| row.thread_id);
+
+    assert_eq!(selected, Some(mine));
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
 #[tokio::test]
 async fn my_agents_is_default_and_filters_by_persisted_membership() {
     let mut app = make_test_app().await;

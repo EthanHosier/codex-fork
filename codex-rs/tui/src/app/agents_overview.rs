@@ -402,9 +402,19 @@ impl App {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .vim_enabled = self.chat_widget.composer_is_vim_enabled();
+        #[cfg(feature = "custom-agents-overview")]
+        let my_agents = self
+            .local_settings
+            .tui
+            .my_agents
+            .iter()
+            .filter_map(|id| ThreadId::from_string(id).ok())
+            .collect();
         let mut view = AgentsOverviewView::new(
             rows,
             selected_thread_id,
+            #[cfg(feature = "custom-agents-overview")]
+            my_agents,
             self.config.features.enabled(Feature::Worktrees)
                 && !crate::uses_remote_workspace_or_environment(
                     &self.app_server_target,
@@ -415,16 +425,6 @@ impl App {
             self.keymap.clone(),
             Arc::clone(&self.agents_overview.view_state),
         );
-        #[cfg(feature = "custom-agents-overview")]
-        {
-            view.my_agents = self
-                .local_settings
-                .tui
-                .my_agents
-                .iter()
-                .filter_map(|id| ThreadId::from_string(id).ok())
-                .collect();
-        }
         view.pinned_thread_ranks = self.agents_overview.pinned_thread_ids.as_ref().map(|ids| {
             ids.iter()
                 .copied()

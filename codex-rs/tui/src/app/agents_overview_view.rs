@@ -206,6 +206,7 @@ impl AgentsOverviewView {
     pub(super) fn new(
         rows: Vec<AgentsOverviewRow>,
         selected_thread_id: Option<ThreadId>,
+        #[cfg(feature = "custom-agents-overview")] my_agents: std::collections::HashSet<ThreadId>,
         worktrees_enabled: bool,
         use_theme_colors: bool,
         app_event_tx: AppEventSender,
@@ -267,7 +268,7 @@ impl AgentsOverviewView {
             use_theme_colors,
             rows,
             #[cfg(feature = "custom-agents-overview")]
-            my_agents: std::collections::HashSet::new(),
+            my_agents,
             project_groups,
             pinned_thread_ranks: None,
             pin_action_pending: false,

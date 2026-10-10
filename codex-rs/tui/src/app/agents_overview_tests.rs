@@ -1329,6 +1329,8 @@ async fn shared_overview_shows_only_root_sessions() {
     let mut action_view = AgentsOverviewView::new(
         view.rows.clone(),
         Some(first_root),
+        #[cfg(feature = "custom-agents-overview")]
+        view.my_agents.clone(),
         /*worktrees_enabled*/ false,
         /*use_theme_colors*/ true,
         crate::app_event_sender::AppEventSender::new(event_tx),
@@ -1527,6 +1529,8 @@ async fn filtered_dashboard_actions_use_configured_shortcuts() {
         )
         .rows,
         Some(first),
+        #[cfg(feature = "custom-agents-overview")]
+        Default::default(),
         /*worktrees_enabled*/ false,
         /*use_theme_colors*/ true,
         crate::app_event_sender::AppEventSender::new(event_tx),
