@@ -36,11 +36,23 @@ impl App {
         self.add_agents_overview_error(format!("{reason} A checkout was retained at {}; remove it with `git worktree remove <checkout-path>` from the source repository if it is no longer needed.", checkout.root.display()));
     }
 
+    #[cfg(any(not(feature = "custom-agents-overview"), test))]
     pub(in crate::app) async fn new_agents_overview_session(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         cwd: Option<AbsolutePathBuf>,
+    ) -> Result<AppRunControl> {
+        self.new_agents_overview_session_with_name(tui, app_server, cwd, None)
+            .await
+    }
+
+    pub(in crate::app) async fn new_agents_overview_session_with_name(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        cwd: Option<AbsolutePathBuf>,
+        name: Option<String>,
     ) -> Result<AppRunControl> {
         if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
             return Ok(AppRunControl::Continue);
@@ -71,6 +83,7 @@ impl App {
             tui,
             app_server,
             cwd,
+            name,
             /*managed_worktree*/ None,
             Some(&mut draft),
         ))
@@ -96,6 +109,7 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         cwd: Option<AbsolutePathBuf>,
+        name: Option<String>,
         managed_worktree: Option<(
             codex_worktree::WorktreeManager,
             codex_worktree::ManagedWorktree,
@@ -161,7 +175,7 @@ impl App {
             )),
         )
         .await;
-        let started = match result {
+        let mut started = match result {
             Ok(started) => started,
             Err(error) => {
                 if let Some((_, checkout)) = &managed_worktree {
@@ -176,6 +190,14 @@ impl App {
             }
         };
         let thread_id = started.session.thread_id;
+        if let Some(name) = name {
+            if let Err(error) = app_server.thread_set_name(thread_id, name.clone()).await {
+                let _ = app_server.thread_unsubscribe(thread_id).await;
+                self.add_agents_overview_error(format!("Failed to name the new session: {error}"));
+                return Ok(AppRunControl::Continue);
+            }
+            started.session.thread_name = Some(name);
+        }
         if let Some(selected) = selected_profile {
             self.agents_overview
                 .selected_permission_profiles

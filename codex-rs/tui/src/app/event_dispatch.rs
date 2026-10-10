@@ -2749,6 +2749,14 @@ impl App {
             }
             AppEvent::OpenAgentsOverview => self.open_agents_overview(app_server),
             AppEvent::ShowMoreAgentsOverview => self.show_more_agents_overview(app_server),
+            #[cfg(feature = "custom-agents-overview")]
+            AppEvent::NewAgentsOverviewSession { cwd, name } => {
+                return Box::pin(
+                    self.new_agents_overview_session_with_name(tui, app_server, cwd, name),
+                )
+                .await;
+            }
+            #[cfg(not(feature = "custom-agents-overview"))]
             AppEvent::NewAgentsOverviewSession { cwd } => {
                 return Box::pin(self.new_agents_overview_session(tui, app_server, cwd)).await;
             }
@@ -2810,7 +2818,15 @@ impl App {
                         };
                         let manager = pending.manager.clone();
                         let cwd = AbsolutePathBuf::try_from(checkout.cwd.clone())?;
-                        return Box::pin(self.start_agents_overview_session(tui, app_server, Some(cwd), Some((manager, checkout)), /*startup_draft*/ None)).await;
+                        return Box::pin(self.start_agents_overview_session(
+                            tui,
+                            app_server,
+                            Some(cwd),
+                            None,
+                            Some((manager, checkout)),
+                            /*startup_draft*/ None,
+                        ))
+                        .await;
                     }
                     Err(error) => self.add_agents_overview_error(error),
                 }
@@ -2823,7 +2839,7 @@ impl App {
                     }
                     Err(error) => {
                         if let Ok(mut state) = self.agents_overview.view_state.lock() {
-                            state.set_rename_input(&name, &self.keymap);
+                            state.set_name_input(&name, &self.keymap);
                             state.rename_target = Some(thread_id);
                         }
                         self.repaint_agents_overview();

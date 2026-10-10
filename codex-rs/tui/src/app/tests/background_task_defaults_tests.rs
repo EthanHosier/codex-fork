@@ -1265,6 +1265,7 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
                 &mut tui,
                 &mut failed_server,
                 Some(unused.cwd.clone().abs()),
+                None,
                 Some((manager.clone(), unused.clone())),
                 /*startup_draft*/ None,
             )

@@ -1,4 +1,4 @@
-//! Status tabs, task rows, the rename editor and details share a wide/narrow layout.
+//! Status tabs, task rows, name editors and details share a wide/narrow layout.
 
 use super::hints::hint_line;
 use super::*;
@@ -91,7 +91,7 @@ impl Renderable for AgentsOverviewView {
 
     fn cursor_style(&self, _area: Rect) -> SetCursorStyle {
         let state = self.state();
-        if state.rename_target.is_some() && state.input.uses_vim_insert_cursor() {
+        if state.name_input_active() && state.input.uses_vim_insert_cursor() {
             SetCursorStyle::SteadyBar
         } else {
             SetCursorStyle::DefaultUserShape
@@ -102,9 +102,14 @@ impl Renderable for AgentsOverviewView {
         let layout = self.center_layout(area);
         let state = self.state();
         if state.editing_metadata() && !layout.search.is_empty() {
-            if state.rename_target.is_some() {
+            if state.name_input_active() {
+                let label = if state.new_session_name_editing {
+                    "New agent name › "
+                } else {
+                    "Rename › "
+                };
                 let mut area = layout.search;
-                let prefix_width = 9.min(area.width);
+                let prefix_width = label.width().min(usize::from(area.width)) as u16;
                 area.x += prefix_width;
                 area.width -= prefix_width;
                 return state.input.cursor_pos(area);
@@ -189,10 +194,15 @@ impl Renderable for AgentsOverviewView {
         );
         if state.editing_metadata() {
             buf.set_style(layout.search, crate::bottom_pane::active_tab_style());
-            if state.rename_target.is_some() {
-                line("Rename › ".cyan().bold(), layout.search, buf);
+            if state.name_input_active() {
+                let label = if state.new_session_name_editing {
+                    "New agent name › "
+                } else {
+                    "Rename › "
+                };
+                line(label.cyan().bold(), layout.search, buf);
                 let mut area = layout.search;
-                let prefix_width = 9.min(area.width);
+                let prefix_width = label.width().min(usize::from(area.width)) as u16;
                 area.x += prefix_width;
                 area.width -= prefix_width;
                 WidgetRef::render_ref(&&state.input, area, buf);

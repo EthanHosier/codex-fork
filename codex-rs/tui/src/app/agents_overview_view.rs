@@ -159,12 +159,13 @@ pub(super) struct AgentsOverviewViewState {
     searching: bool,
     pub(super) grouping: AgentsOverviewGrouping,
     pub(super) rename_target: Option<ThreadId>,
+    pub(super) new_session_name_editing: bool,
     // The picker can finish this retained view when it selects the already active session.
     pub(super) completion: Option<ViewCompletion>,
 }
 
 impl AgentsOverviewViewState {
-    pub(super) fn set_rename_input(&mut self, text: &str, keymap: &RuntimeKeymap) {
+    pub(super) fn set_name_input(&mut self, text: &str, keymap: &RuntimeKeymap) {
         let mut input = TextArea::new_single_line();
         input.set_keymap_bindings(keymap);
         input.set_vim_enabled(self.vim_enabled);
@@ -175,7 +176,11 @@ impl AgentsOverviewViewState {
     }
 
     pub(super) fn editing_metadata(&self) -> bool {
-        self.searching || self.rename_target.is_some()
+        self.searching || self.name_input_active()
+    }
+
+    pub(super) fn name_input_active(&self) -> bool {
+        self.rename_target.is_some() || self.new_session_name_editing
     }
 }
 
@@ -247,7 +252,7 @@ impl AgentsOverviewView {
         {
             let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
             let vim_enabled = state.vim_enabled;
-            if state.rename_target.is_some() {
+            if state.name_input_active() {
                 state.input.set_keymap_bindings(&keymap);
                 if state.input.is_vim_enabled() != vim_enabled {
                     state.input.set_vim_enabled(vim_enabled);
@@ -322,7 +327,7 @@ impl AgentsOverviewView {
     }
 
     fn move_selection(&mut self, forward: bool) {
-        if self.state().rename_target.is_some() {
+        if self.state().name_input_active() {
             return;
         }
         let visible = self.selectable_indices();
@@ -342,6 +347,24 @@ impl AgentsOverviewView {
     }
 
     fn activate(&mut self) {
+        if self.state().new_session_name_editing {
+            #[cfg(feature = "custom-agents-overview")]
+            {
+                let name = self.state().input.text().trim().to_owned();
+                if name.is_empty() {
+                    return;
+                }
+                self.app_event_tx.send(AppEvent::NewAgentsOverviewSession {
+                    cwd: self.selected_row().map(|row| row.thread.cwd.clone()),
+                    #[cfg(feature = "custom-agents-overview")]
+                    name: Some(name),
+                });
+                let mut state = self.state();
+                state.new_session_name_editing = false;
+                state.input.set_text_clearing_elements("");
+                return;
+            }
+        }
         if self.selected == usize::MAX && self.state().has_more {
             if !self.state().loading {
                 self.state().loading = true;
@@ -536,7 +559,7 @@ impl BottomPaneView for AgentsOverviewView {
 
     fn keymap_contexts(&self) -> KeymapContextSet {
         let state = self.state();
-        if state.rename_target.is_some() {
+        if state.name_input_active() {
             let contexts = KeymapContextSet::new(state.input.keymap_context());
             if state.input.is_vim_operator_pending() {
                 contexts
@@ -567,6 +590,7 @@ impl BottomPaneView for AgentsOverviewView {
         if state.editing_metadata() {
             state.searching = false;
             state.rename_target = None;
+            state.new_session_name_editing = false;
             state.search.clear();
             state.input.set_text_clearing_elements("");
             drop(state);
@@ -577,7 +601,7 @@ impl BottomPaneView for AgentsOverviewView {
     }
 
     fn handle_paste(&mut self, pasted: String) -> bool {
-        if self.state().rename_target.is_some() {
+        if self.state().name_input_active() {
             self.state()
                 .input
                 .insert_str(&crate::history_cell::sanitize_user_text(pasted.into()));
@@ -600,7 +624,7 @@ impl BottomPaneView for AgentsOverviewView {
         if key.kind == crossterm::event::KeyEventKind::Release {
             return;
         }
-        if self.rename_key(key) || self.command_center_key(key) {
+        if self.name_input_key(key) || self.command_center_key(key) {
             return;
         }
         if key.code == KeyCode::Backspace
@@ -674,9 +698,21 @@ impl BottomPaneView for AgentsOverviewView {
             return;
         }
         if self.agents_keymap.new_task.is_pressed(key) {
-            self.app_event_tx.send(AppEvent::NewAgentsOverviewSession {
-                cwd: self.selected_row().map(|row| row.thread.cwd.clone()),
-            });
+            if cfg!(feature = "custom-agents-overview") {
+                let mut state = self.state();
+                if !state.editing_metadata() {
+                    state.set_name_input("", &self.editor_keymap);
+                    state.search.clear();
+                    state.searching = false;
+                    state.new_session_name_editing = true;
+                }
+            } else {
+                self.app_event_tx.send(AppEvent::NewAgentsOverviewSession {
+                    cwd: self.selected_row().map(|row| row.thread.cwd.clone()),
+                    #[cfg(feature = "custom-agents-overview")]
+                    name: None,
+                });
+            }
             return;
         }
         if self.agents_keymap.new_worktree.is_pressed(key) {
@@ -699,7 +735,7 @@ impl BottomPaneView for AgentsOverviewView {
             if let Some(row) = self.selected_row() {
                 let mut state = self.state();
                 if state.rename_target.is_none() {
-                    state.set_rename_input(
+                    state.set_name_input(
                         row.thread.name.as_deref().unwrap_or_default(),
                         &self.editor_keymap,
                     );

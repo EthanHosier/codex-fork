@@ -177,7 +177,9 @@ impl AgentsOverviewView {
         if let Some(hint) = self.center_list_hint(ListAction::Accept) {
             hints.push((
                 hint.display_label(),
-                if state.rename_target.is_some() {
+                if state.new_session_name_editing {
+                    "create"
+                } else if state.rename_target.is_some() {
                     "rename"
                 } else {
                     "open"

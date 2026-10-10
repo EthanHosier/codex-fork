@@ -1,12 +1,12 @@
-//! Shared rename editing and task shortcuts respect configured editor and list bindings.
+//! Name editing and task shortcuts respect configured editor and list bindings.
 
 use super::*;
 use crossterm::event::KeyEventKind;
 
 impl AgentsOverviewView {
-    pub(in crate::app::agents_overview_view) fn rename_key(&mut self, key: KeyEvent) -> bool {
+    pub(in crate::app::agents_overview_view) fn name_input_key(&mut self, key: KeyEvent) -> bool {
         let mut state = self.state();
-        if state.rename_target.is_none() {
+        if !state.name_input_active() {
             return false;
         }
         let input = &mut state.input;

@@ -305,9 +305,11 @@ pub(crate) enum AppEvent {
     /// Open the live command center for recent and locally retained root sessions.
     OpenAgentsOverview,
     ShowMoreAgentsOverview,
-    /// Create an empty thread from the command center.
+    /// Create an empty thread, optionally named, from the command center.
     NewAgentsOverviewSession {
         cwd: Option<AbsolutePathBuf>,
+        #[cfg(feature = "custom-agents-overview")]
+        name: Option<String>,
     },
     /// Update the daemon-wide overview after a background thread listing finishes.
     AgentsOverviewThreadsLoaded {

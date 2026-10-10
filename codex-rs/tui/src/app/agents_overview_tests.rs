@@ -3068,10 +3068,41 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
     view.handle_key_event(KeyCode::Char('p').into());
     assert!(rx.try_recv().is_err());
     for _ in 0..3 {
-        view.handle_key_event(KeyCode::Char('n').into());
-        assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { cwd: Some(cwd) }) if cwd == target.cwd)
-        );
+        #[cfg(feature = "custom-agents-overview")]
+        {
+            view.handle_key_event(KeyCode::Char('n').into());
+            assert!(
+                rx.try_recv().is_err(),
+                "with custom-agents-overview enabled, n should open the name editor instead of creating a session"
+            );
+            view.handle_key_event(KeyCode::Esc.into());
+            assert!(
+                rx.try_recv().is_err(),
+                "Escape should cancel naming without creating a session"
+            );
+
+            view.handle_key_event(KeyCode::Char('n').into());
+            for character in "Named Agent".chars() {
+                view.handle_key_event(KeyCode::Char(character).into());
+            }
+            view.handle_key_event(KeyCode::Enter.into());
+            let (cwd, name) = match rx.try_recv() {
+                Ok(AppEvent::NewAgentsOverviewSession {
+                    cwd: Some(cwd),
+                    name: Some(name),
+                }) => (cwd, name),
+                other => panic!("expected named new-session event, got {other:?}"),
+            };
+            assert_eq!(cwd, target.cwd);
+            assert_eq!(name, "Named Agent");
+        }
+        #[cfg(not(feature = "custom-agents-overview"))]
+        {
+            view.handle_key_event(KeyCode::Char('n').into());
+            assert!(
+                matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { cwd: Some(cwd) }) if cwd == target.cwd)
+            );
+        }
         view.handle_key_event(KeyCode::Char('w').into());
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewWorktree { cwd: Some(cwd) }) if cwd == target.cwd)
@@ -3092,11 +3123,21 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
         matches!(rx.try_recv(), Ok(AppEvent::RenameAgentsOverviewThread { name, .. }) if name.ends_with("nwogrxfhap"))
     );
     let mut empty = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
-    empty.handle_key_event(KeyCode::Char('n').into());
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(AppEvent::NewAgentsOverviewSession { cwd: None })
-    ));
+    #[cfg(feature = "custom-agents-overview")]
+    {
+        empty.handle_key_event(KeyCode::Char('n').into());
+        assert!(rx.try_recv().is_err());
+        empty.handle_key_event(KeyCode::Esc.into());
+        assert!(rx.try_recv().is_err());
+    }
+    #[cfg(not(feature = "custom-agents-overview"))]
+    {
+        empty.handle_key_event(KeyCode::Char('n').into());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::NewAgentsOverviewSession { cwd: None })
+        ));
+    }
     app.config.features.disable(Feature::Worktrees).unwrap();
     let mut disabled = app.agents_overview_view(vec![target], Some(id));
     disabled.handle_key_event(KeyCode::Char('w').into());
