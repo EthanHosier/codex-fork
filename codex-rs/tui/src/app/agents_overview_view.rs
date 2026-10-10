@@ -632,6 +632,22 @@ impl BottomPaneView for AgentsOverviewView {
             return;
         }
         #[cfg(feature = "custom-agents-overview")]
+        if key.code == KeyCode::Char('m')
+            && key.modifiers.is_empty()
+            && !self.state().editing_metadata()
+            && self.state().status_filter != 0
+        {
+            if let Some(row) = self
+                .selected_row()
+                .filter(|row| !self.my_agents.contains(&row.thread_id))
+            {
+                self.app_event_tx.send(AppEvent::AddMyAgent {
+                    thread_id: row.thread_id,
+                });
+            }
+            return;
+        }
+        #[cfg(feature = "custom-agents-overview")]
         if key.code == KeyCode::Char('d')
             && key.modifiers.is_empty()
             && !self.state().editing_metadata()

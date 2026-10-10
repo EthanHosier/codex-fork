@@ -194,6 +194,14 @@ impl AgentsOverviewView {
         {
             hints.push((hint.display_label(), "new".into()));
         }
+        #[cfg(feature = "custom-agents-overview")]
+        if !state.editing_metadata() {
+            if state.status_filter == 0 {
+                hints.push(("d".into(), "remove".into()));
+            } else {
+                hints.push(("m".into(), "add to My agents".into()));
+            }
+        }
         hints
     }
 }

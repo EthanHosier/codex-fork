@@ -156,8 +156,24 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
 }
 
 #[cfg(feature = "custom-agents-overview")]
-#[tokio::test]
-async fn d_confirms_removing_a_my_agent_without_deleting_its_thread() -> Result<()> {
+#[test]
+fn d_confirms_removing_a_my_agent_without_deleting_its_thread() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(d_confirms_removing_a_my_agent_without_deleting_its_thread_inner())
+        })
+        .expect("test thread starts")
+        .join()
+        .expect("test thread does not panic")?;
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn d_confirms_removing_a_my_agent_without_deleting_its_thread_inner() -> Result<()> {
     let (mut app, mut rx, _op_rx) = crate::app::tests::make_test_app_with_channels().await;
     let id = ThreadId::from_u128(/*value*/ 420);
     app.local_settings.tui.my_agents = vec![id.to_string()];
@@ -202,6 +218,70 @@ async fn d_confirms_removing_a_my_agent_without_deleting_its_thread() -> Result<
     assert!(!app.local_settings.tui.my_agents.contains(&id.to_string()));
     assert!(app.agents_overview.threads.contains_key(&id));
 
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
+#[test]
+fn m_adds_selected_task_to_my_agents_from_another_tab() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(m_adds_selected_task_to_my_agents_from_another_tab_inner())
+        })
+        .expect("test thread starts")
+        .join()
+        .expect("test thread does not panic")?;
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn m_adds_selected_task_to_my_agents_from_another_tab_inner() -> Result<()> {
+    let (mut app, mut rx, _op_rx) = crate::app::tests::make_test_app_with_channels().await;
+    let id = ThreadId::from_u128(/*value*/ 422);
+    let thread = overview_thread(
+        id,
+        /*parent_thread_id*/ None,
+        "Ordinary session",
+        ThreadStatus::Idle,
+    );
+    let mut view = app.agents_overview_view(vec![thread], Some(id));
+    // The tabs are My agents, Needs you, Working, Ready, then All.
+    for _ in 0..4 {
+        view.handle_key_event(KeyCode::Right.into());
+    }
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+
+    let hints = render_bottom_popup(&app.chat_widget, /*width*/ 96);
+    assert!(hints.contains("m add to My agents"), "{hints}");
+    assert!(
+        hints.rfind("m add to My agents") > hints.rfind("n new"),
+        "{hints}"
+    );
+    app.chat_widget.handle_key_event(KeyCode::Char('m').into());
+    let event = rx.try_recv().expect("m should add the selected task");
+    assert!(matches!(event, AppEvent::AddMyAgent { thread_id } if thread_id == id));
+
+    let home = tempfile::tempdir()?;
+    let config_path = home.path().join("config.toml");
+    std::fs::write(&config_path, "[tui]\n")?;
+    app.local_settings.user_config_path = AbsolutePathBuf::try_from(config_path.clone())?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    assert!(app.local_settings.tui.my_agents.contains(&id.to_string()));
+    app.chat_widget.handle_key_event(KeyCode::Char('m').into());
+    assert!(
+        rx.try_recv().is_err(),
+        "m should not add an existing member again"
+    );
+    let persisted = std::fs::read_to_string(config_path)?;
+    assert!(persisted.contains(&id.to_string()), "{persisted}");
+    assert_eq!(persisted.matches(&id.to_string()).count(), 1, "{persisted}");
     app_server.shutdown().await?;
     Ok(())
 }

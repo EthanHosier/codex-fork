@@ -425,6 +425,11 @@ async fn my_agents_is_default_and_filters_by_persisted_membership() {
 
     let my_agents = screen(&view, /*width*/ 100, /*height*/ 18);
     assert!(my_agents.contains("My agents 1"), "{my_agents}");
+    assert!(my_agents.contains("d remove"), "{my_agents}");
+    assert!(
+        my_agents.rfind("d remove") > my_agents.rfind("n new"),
+        "{my_agents}"
+    );
     assert!(!my_agents.contains("Inactive"), "{my_agents}");
     assert!(my_agents.contains("Named agent"), "{my_agents}");
     assert!(!my_agents.contains("Ordinary session"), "{my_agents}");

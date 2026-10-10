@@ -475,6 +475,31 @@ impl App {
     }
 
     #[cfg(feature = "custom-agents-overview")]
+    pub(super) async fn add_my_agent(&mut self, thread_id: ThreadId) {
+        let thread_id_string = thread_id.to_string();
+        if self
+            .local_settings
+            .tui
+            .my_agents
+            .contains(&thread_id_string)
+        {
+            return;
+        }
+        let mut updated = self.local_settings.tui.my_agents.clone();
+        updated.push(thread_id_string);
+        if let Err(error) = self
+            .persist_my_agents_config(self.local_settings.user_config_path.as_path(), &updated)
+            .await
+        {
+            self.add_agents_overview_error(format!("Failed to update My agents: {error}"));
+            return;
+        }
+        self.local_settings.tui.my_agents = updated;
+        self.config.tui_my_agents = self.local_settings.tui.my_agents.clone();
+        self.repaint_agents_overview();
+    }
+
+    #[cfg(feature = "custom-agents-overview")]
     pub(super) async fn persist_my_agents_config(
         &self,
         config_path: &std::path::Path,

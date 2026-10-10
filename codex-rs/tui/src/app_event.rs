@@ -390,6 +390,11 @@ pub(crate) enum AppEvent {
     RemoveMyAgent {
         thread_id: ThreadId,
     },
+    /// Add a task to the client-local My agents tab.
+    #[cfg(feature = "custom-agents-overview")]
+    AddMyAgent {
+        thread_id: ThreadId,
+    },
     /// Confirm a server lifecycle action for the selected dashboard task.
     ConfirmAgentsOverviewAction {
         thread_id: ThreadId,

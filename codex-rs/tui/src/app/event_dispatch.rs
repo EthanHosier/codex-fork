@@ -2944,6 +2944,10 @@ impl App {
             AppEvent::RemoveMyAgent { thread_id } => {
                 self.remove_my_agent(thread_id).await;
             }
+            #[cfg(feature = "custom-agents-overview")]
+            AppEvent::AddMyAgent { thread_id } => {
+                self.add_my_agent(thread_id).await;
+            }
             AppEvent::ConfirmAgentsOverviewAction { thread_id, action } => {
                 self.confirm_agents_overview_action(thread_id, action);
             }
