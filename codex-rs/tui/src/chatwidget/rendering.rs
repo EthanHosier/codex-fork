@@ -100,8 +100,8 @@ impl ExternalWriterNotice {
         ];
         if self.command_center_available {
             let key = if self.agents_navigation_key_available {
-                let left = crate::key_hint::plain(KeyCode::Left).display_label();
-                format!("{left}/{escape}")
+                let shortcut = crate::bottom_pane::agents_navigation_shortcut_key().display_label();
+                format!("{shortcut}/{escape}")
             } else {
                 escape
             };

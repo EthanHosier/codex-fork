@@ -312,9 +312,11 @@ pub(crate) enum AppEvent {
     /// Open the live command center for recent and locally retained root sessions.
     OpenAgentsOverview,
     ShowMoreAgentsOverview,
-    /// Create an empty thread from the command center.
+    /// Create an empty thread, optionally named, from the command center.
     NewAgentsOverviewSession {
         cwd: Option<AbsolutePathBuf>,
+        #[cfg(feature = "custom-agents-overview")]
+        name: Option<String>,
     },
     /// Update the daemon-wide overview after a background thread listing finishes.
     AgentsOverviewThreadsLoaded {
@@ -333,10 +335,18 @@ pub(crate) enum AppEvent {
     /// Fork the selected dashboard conversation and open the new session.
     ForkAgentsOverviewThread {
         thread_id: ThreadId,
+        #[cfg(feature = "custom-agents-overview")]
+        fork_name: Option<String>,
+        #[cfg(feature = "custom-agents-overview")]
+        add_to_my_agents: bool,
     },
     /// Run the existing fork action after selection events have been processed.
     ForkAgentsOverviewThreadReady {
         thread_id: ThreadId,
+        #[cfg(feature = "custom-agents-overview")]
+        fork_name: Option<String>,
+        #[cfg(feature = "custom-agents-overview")]
+        add_to_my_agents: bool,
     },
     /// Rename a task directly from the shared dashboard.
     RenameAgentsOverviewThread {
@@ -383,6 +393,21 @@ pub(crate) enum AppEvent {
     },
     /// Hide a dashboard row locally without stopping its task.
     HideAgentsOverviewThread {
+        thread_id: ThreadId,
+    },
+    /// Ask whether to remove a task from the client-local My agents tab.
+    #[cfg(feature = "custom-agents-overview")]
+    ConfirmRemoveMyAgent {
+        thread_id: ThreadId,
+    },
+    /// Remove a task from the client-local My agents tab without deleting its history.
+    #[cfg(feature = "custom-agents-overview")]
+    RemoveMyAgent {
+        thread_id: ThreadId,
+    },
+    /// Add a task to the client-local My agents tab.
+    #[cfg(feature = "custom-agents-overview")]
+    AddMyAgent {
         thread_id: ThreadId,
     },
     /// Confirm a server lifecycle action for the selected dashboard task.

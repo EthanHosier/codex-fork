@@ -23,6 +23,14 @@ fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> String {
     )
 }
 
+fn center_filter_snapshot(name: &str) -> String {
+    if cfg!(feature = "custom-agents-overview") {
+        format!("{name}_arrow_filters")
+    } else {
+        name.to_string()
+    }
+}
+
 #[tokio::test]
 async fn live_center_columns() {
     let mut app = make_test_app().await;
@@ -77,7 +85,10 @@ async fn live_center_columns() {
     crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, child);
     app.agents_overview.pinned_thread_ids = Some(vec![current, ThreadId::from_u128(/*value*/ 44)]);
     let mut view = app.agents_overview_view(threads, Some(current));
-    insta::assert_snapshot!(screen(&view, /*width*/ 160, /*height*/ 22));
+    insta::assert_snapshot!(
+        center_filter_snapshot("live_center_columns"),
+        screen(&view, /*width*/ 160, /*height*/ 22)
+    );
     view.pinned_thread_ranks = None;
     let mut selected_status_styles = Vec::new();
     for _ in 0..fixtures.len() {
@@ -241,7 +252,11 @@ async fn live_center_rename_retains_target_when_status_leaves_filter() -> Result
         // Reuse the Ready tab after the first iteration.
         if key == KeyCode::Esc {
             for _ in 0..3 {
-                view.handle_key_event(KeyCode::Tab.into());
+                view.handle_key_event(if cfg!(feature = "custom-agents-overview") {
+                    KeyCode::Right.into()
+                } else {
+                    KeyCode::Tab.into()
+                });
             }
         }
         view.handle_key_event(KeyCode::Char('r').into());
@@ -335,16 +350,29 @@ async fn live_center_navigation_and_complete_hints() {
         Some(ready),
     );
     let selected = |view: &AgentsOverviewView| view.rows[view.selected_index().unwrap()].thread_id;
-    view.handle_key_event(KeyCode::Tab.into());
+    view.handle_key_event(if cfg!(feature = "custom-agents-overview") {
+        KeyCode::Right.into()
+    } else {
+        KeyCode::Tab.into()
+    });
     assert_eq!(selected(&view), needs_you);
-    view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+    if cfg!(feature = "custom-agents-overview") {
+        view.handle_key_event(KeyCode::Left.into());
+        view.handle_key_event(KeyCode::Left.into());
+    } else {
+        view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+    }
     assert_eq!(selected(&view), unloaded);
     insta::assert_snapshot!(
         "live_center_status_filter",
         screen(&view, /*width*/ 40, /*height*/ 12)
     );
-    view.handle_key_event(KeyCode::Tab.into());
+    view.handle_key_event(if cfg!(feature = "custom-agents-overview") {
+        KeyCode::Right.into()
+    } else {
+        KeyCode::Tab.into()
+    });
 
     let repeat_help =
         KeyEvent::new_with_kind(KeyCode::Char('?'), KeyModifiers::NONE, KeyEventKind::Repeat);
@@ -356,7 +384,14 @@ async fn live_center_navigation_and_complete_hints() {
         ("live_center_help_one_column", 40, 32),
         ("live_center_navigation_and_complete_hints", 40, 24),
     ] {
-        insta::assert_snapshot!(name, screen(&view, width, height));
+        insta::assert_snapshot!(
+            if name.starts_with("live_center_help_") {
+                center_filter_snapshot(name)
+            } else {
+                name.to_string()
+            },
+            screen(&view, width, height)
+        );
     }
     view.handle_key_event(KeyCode::Esc.into());
     view.handle_key_event(repeat_help);
@@ -364,6 +399,50 @@ async fn live_center_navigation_and_complete_hints() {
     assert!(!view.is_complete());
     view.handle_key_event(KeyCode::Esc.into());
     assert!(view.is_complete());
+}
+
+#[cfg(feature = "custom-agents-overview")]
+#[tokio::test]
+async fn my_agents_is_default_and_filters_by_persisted_membership() {
+    let mut app = make_test_app().await;
+    let mine = ThreadId::from_u128(/*value*/ 420);
+    let ordinary = ThreadId::from_u128(/*value*/ 421);
+    app.local_settings.tui.my_agents = vec![mine.to_string()];
+    let mut named = overview_thread(
+        mine,
+        /*parent_thread_id*/ None,
+        "Named agent",
+        ThreadStatus::Idle,
+    );
+    named.name = Some("Named agent".to_string());
+    let ordinary_thread = overview_thread(
+        ordinary,
+        /*parent_thread_id*/ None,
+        "Ordinary session",
+        ThreadStatus::Idle,
+    );
+    let view = app.agents_overview_view(vec![named, ordinary_thread], Some(mine));
+
+    let my_agents = screen(&view, /*width*/ 100, /*height*/ 18);
+    assert!(my_agents.contains("My agents 1"), "{my_agents}");
+    assert!(my_agents.contains("d remove"), "{my_agents}");
+    assert!(
+        my_agents.rfind("d remove") > my_agents.rfind("n new"),
+        "{my_agents}"
+    );
+    assert!(!my_agents.contains("Inactive"), "{my_agents}");
+    assert!(my_agents.contains("Named agent"), "{my_agents}");
+    assert!(!my_agents.contains("Ordinary session"), "{my_agents}");
+
+    let mut view = view;
+    // My agents is the default; All is the final tab after the status tabs.
+    for _ in 0..4 {
+        view.handle_key_event(KeyCode::Right.into());
+    }
+    let all = screen(&view, /*width*/ 100, /*height*/ 18);
+    assert!(all.contains("All 2"), "{all}");
+    assert!(all.contains("Named agent"), "{all}");
+    assert!(all.contains("Ordinary session"), "{all}");
 }
 
 #[tokio::test]
@@ -400,7 +479,11 @@ async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
         assert!(!view.is_complete());
     }
     for (binding, key) in [
-        ("tab", KeyEvent::from(KeyCode::Tab)),
+        if cfg!(feature = "custom-agents-overview") {
+            ("right", KeyEvent::from(KeyCode::Right))
+        } else {
+            ("tab", KeyEvent::from(KeyCode::Tab))
+        },
         ("?", KeyEvent::from(KeyCode::Char('?'))),
         (
             "shift-?",
@@ -476,7 +559,7 @@ toggle_pin = 'z p'
     app.agents_overview.pinned_thread_ids = Some(Vec::new());
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     insta::assert_snapshot!(
-        "live_center_custom_footer",
+        center_filter_snapshot("live_center_custom_footer"),
         screen(&view, /*width*/ 100, /*height*/ 12)
     );
     let thread_id = ThreadId::from_u128(/*value*/ 42);
@@ -491,7 +574,7 @@ toggle_pin = 'z p'
     );
     view.handle_key_event(KeyCode::Char('?').into());
     insta::assert_snapshot!(
-        "live_center_custom_help",
+        center_filter_snapshot("live_center_custom_help"),
         screen(&view, /*width*/ 100, /*height*/ 24)
     );
 }

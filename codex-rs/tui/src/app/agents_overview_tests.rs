@@ -9,6 +9,14 @@ use super::*;
 use crate::app::tests::make_test_app_with_channels;
 use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
 
+fn filter_hint_snapshot_name(name: &str) -> String {
+    if cfg!(feature = "custom-agents-overview") {
+        format!("{name}_arrow_filters")
+    } else {
+        name.to_string()
+    }
+}
+
 #[tokio::test]
 async fn overview_worktree_creation_busy_state() {
     let mut app = make_test_app().await;
@@ -161,6 +169,7 @@ static OVERVIEW_TIMESTAMP: std::sync::LazyLock<i64> =
     std::sync::LazyLock::new(|| chrono::Utc::now().timestamp() - 120);
 
 #[tokio::test]
+#[cfg(not(feature = "custom-agents-overview"))]
 async fn overview_right_opens_current_or_highlighted_task() {
     let mut app = make_test_app().await;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -917,7 +926,7 @@ async fn agents_overview_details_render_markdown() {
         .unwrap();
     let cached = terminal.backend().to_string();
     insta::assert_snapshot!(
-        "agents_overview_markdown",
+        filter_hint_snapshot_name("agents_overview_markdown"),
         normalize_agent_center_snapshot(&cached)
     );
 
@@ -954,7 +963,7 @@ async fn agents_overview_details_render_markdown() {
     app.chat_widget.show_bottom_pane_view(Box::new(view));
 
     insta::assert_snapshot!(
-        "agents_overview_markdown_long_lines",
+        filter_hint_snapshot_name("agents_overview_markdown_long_lines"),
         normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, /*width*/ 96))
     );
 
@@ -965,7 +974,7 @@ async fn agents_overview_details_render_markdown() {
     let view = app.agents_overview_view(vec![thread], Some(thread_id));
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     insta::assert_snapshot!(
-        "agents_overview_markdown_table",
+        filter_hint_snapshot_name("agents_overview_markdown_table"),
         normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, /*width*/ 96))
     );
 }
@@ -1251,7 +1260,7 @@ async fn overview_model_grouping_shows_details_and_preserves_selection() {
     }
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     insta::assert_snapshot!(
-        "agents_overview_model_grouping",
+        filter_hint_snapshot_name("agents_overview_model_grouping"),
         render_bottom_popup(&app.chat_widget, /*width*/ 100)
             .replace(&test_path_display("/tmp/project"), "/tmp/project")
             .replace("fwd del", "del")
@@ -2477,8 +2486,21 @@ async fn command_center_handles_resume_failure_and_success() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<()> {
+#[test]
+fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(command_center_attach_conflict_opens_read_only_and_retries_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("command center attach test thread panicked"))?
+}
+
+async fn command_center_attach_conflict_opens_read_only_and_retries_inner() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     trust_fixture_folders(&mut app);
     std::fs::write(
@@ -2571,7 +2593,7 @@ async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<
         app.runtime_approval_policy_override,
         app.runtime_permission_profile_override.clone(),
     );
-    app.chat_widget.handle_key_event(KeyCode::Right.into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
     let event = rx.try_recv()?;
     assert!(
         matches!(event, AppEvent::SelectAgentsOverviewThread { thread_id: id } if id == thread_id)
@@ -2599,8 +2621,13 @@ async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<
         insta::assert_snapshot!("agents_overview_attach_conflict", render_bottom_popup(&app.chat_widget, /*width*/ 96));
     });
 
-    for key in [KeyCode::Left, KeyCode::Esc] {
-        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
+    let (agents_key, agents_modifiers) =
+        crate::bottom_pane::agents_navigation_shortcut_key().parts();
+    for key in [
+        KeyEvent::new(agents_key, agents_modifiers),
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    ] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))).await?;
         assert_eq!(
             app.chat_widget
                 .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID),
@@ -2791,6 +2818,90 @@ async fn command_center_action_failures_remain_visible() -> Result<()> {
 #[path = "agents_overview_actions_tests.rs"]
 mod actions;
 
+#[cfg(feature = "custom-agents-overview")]
+#[test]
+fn overview_forks_are_suffixed_and_only_my_agents_forks_are_persisted() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(
+                    overview_forks_are_suffixed_and_only_my_agents_forks_are_persisted_inner(),
+                )
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("overview fork test thread panicked"))?
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn overview_forks_are_suffixed_and_only_my_agents_forks_are_persisted_inner() -> Result<()> {
+    let (app, _events, _operations) = make_test_app_with_channels().await;
+    let mut app = Box::pin(app);
+    let home = tempfile::tempdir()?;
+    let config_path = home.path().join("config.toml");
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+
+    let my_source = server.start_thread(&app.config).await?;
+    let my_source_id = my_source.session.thread_id;
+    server
+        .thread_set_name(my_source_id, "Named agent".to_string())
+        .await?;
+    let other_source = server.start_thread(&app.config).await?;
+    let other_source_id = other_source.session.thread_id;
+    server
+        .thread_set_name(other_source_id, "Other session".to_string())
+        .await?;
+
+    app.local_settings.user_config_path = AbsolutePathBuf::try_from(config_path.clone())?;
+    app.local_settings.tui.my_agents = vec![my_source_id.to_string()];
+    app.config.tui_my_agents = app.local_settings.tui.my_agents.clone();
+    std::fs::write(
+        &config_path,
+        format!("[tui]\nmy_agents = [\"{my_source_id}\"]\n"),
+    )?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut outcomes = Vec::new();
+
+    for (source_id, source_name, add_to_my_agents) in [
+        (my_source_id, "Named agent", true),
+        (other_source_id, "Other session", false),
+    ] {
+        Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, source_id)).await?;
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut server,
+            AppEvent::ForkAgentsOverviewThreadReady {
+                thread_id: source_id,
+                fork_name: Some(format!("{source_name} (fork)")),
+                add_to_my_agents,
+            },
+        ))
+        .await?;
+
+        let fork_id = app.chat_widget.thread_id().expect("fork has a thread id");
+        let fork = server.thread_read(fork_id, /*include_turns*/ false).await?;
+        outcomes.push((
+            fork.name,
+            app.local_settings
+                .tui
+                .my_agents
+                .contains(&fork_id.to_string()),
+        ));
+    }
+
+    assert_eq!(
+        outcomes,
+        vec![
+            (Some("Named agent (fork)".to_string()), true),
+            (Some("Other session (fork)".to_string()), false),
+        ]
+    );
+    server.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn overview_fork_preserves_an_open_side_conversation() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
@@ -2812,6 +2923,10 @@ async fn overview_fork_preserves_an_open_side_conversation() -> Result<()> {
         &mut server,
         AppEvent::ForkAgentsOverviewThread {
             thread_id: ThreadId::new(),
+            #[cfg(feature = "custom-agents-overview")]
+            fork_name: None,
+            #[cfg(feature = "custom-agents-overview")]
+            add_to_my_agents: false,
         },
     ))
     .await?;
@@ -2886,7 +3001,13 @@ async fn overview_fork_keeps_idle_source_input_queued() -> Result<()> {
         Box::pin(app.handle_event(
             &mut tui,
             &mut server,
-            AppEvent::ForkAgentsOverviewThread { thread_id: source },
+            AppEvent::ForkAgentsOverviewThread {
+                thread_id: source,
+                #[cfg(feature = "custom-agents-overview")]
+                fork_name: None,
+                #[cfg(feature = "custom-agents-overview")]
+                add_to_my_agents: false,
+            },
         ))
         .await?;
         assert_eq!(
@@ -2922,7 +3043,13 @@ async fn overview_fork_keeps_idle_source_input_queued() -> Result<()> {
         Box::pin(app.handle_event(
             &mut tui,
             &mut server,
-            AppEvent::ForkAgentsOverviewThreadReady { thread_id: source },
+            AppEvent::ForkAgentsOverviewThreadReady {
+                thread_id: source,
+                #[cfg(feature = "custom-agents-overview")]
+                fork_name: None,
+                #[cfg(feature = "custom-agents-overview")]
+                add_to_my_agents: false,
+            },
         ))
         .await?;
         assert_eq!(app.current_displayed_thread_id(), Some(source));
@@ -3041,10 +3168,41 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
     view.handle_key_event(KeyCode::Char('p').into());
     assert!(rx.try_recv().is_err());
     for _ in 0..3 {
-        view.handle_key_event(KeyCode::Char('n').into());
-        assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { cwd: Some(cwd) }) if cwd == target.cwd)
-        );
+        #[cfg(feature = "custom-agents-overview")]
+        {
+            view.handle_key_event(KeyCode::Char('n').into());
+            assert!(
+                rx.try_recv().is_err(),
+                "with custom-agents-overview enabled, n should open the name editor instead of creating a session"
+            );
+            view.handle_key_event(KeyCode::Esc.into());
+            assert!(
+                rx.try_recv().is_err(),
+                "Escape should cancel naming without creating a session"
+            );
+
+            view.handle_key_event(KeyCode::Char('n').into());
+            for character in "Named Agent".chars() {
+                view.handle_key_event(KeyCode::Char(character).into());
+            }
+            view.handle_key_event(KeyCode::Enter.into());
+            let (cwd, name) = match rx.try_recv() {
+                Ok(AppEvent::NewAgentsOverviewSession {
+                    cwd: Some(cwd),
+                    name: Some(name),
+                }) => (cwd, name),
+                other => panic!("expected named new-session event, got {other:?}"),
+            };
+            assert_eq!(cwd, target.cwd);
+            assert_eq!(name, "Named Agent");
+        }
+        #[cfg(not(feature = "custom-agents-overview"))]
+        {
+            view.handle_key_event(KeyCode::Char('n').into());
+            assert!(
+                matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewSession { cwd: Some(cwd) }) if cwd == target.cwd)
+            );
+        }
         view.handle_key_event(KeyCode::Char('w').into());
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::NewAgentsOverviewWorktree { cwd: Some(cwd) }) if cwd == target.cwd)
@@ -3065,11 +3223,21 @@ async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone(
         matches!(rx.try_recv(), Ok(AppEvent::RenameAgentsOverviewThread { name, .. }) if name.ends_with("nwogrxfhap"))
     );
     let mut empty = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
-    empty.handle_key_event(KeyCode::Char('n').into());
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(AppEvent::NewAgentsOverviewSession { cwd: None })
-    ));
+    #[cfg(feature = "custom-agents-overview")]
+    {
+        empty.handle_key_event(KeyCode::Char('n').into());
+        assert!(rx.try_recv().is_err());
+        empty.handle_key_event(KeyCode::Esc.into());
+        assert!(rx.try_recv().is_err());
+    }
+    #[cfg(not(feature = "custom-agents-overview"))]
+    {
+        empty.handle_key_event(KeyCode::Char('n').into());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(AppEvent::NewAgentsOverviewSession { cwd: None })
+        ));
+    }
     app.config.features.disable(Feature::Worktrees).unwrap();
     let mut disabled = app.agents_overview_view(vec![target], Some(id));
     disabled.handle_key_event(KeyCode::Char('w').into());

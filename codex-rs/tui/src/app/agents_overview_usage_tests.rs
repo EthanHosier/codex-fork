@@ -133,7 +133,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
         " ".repeat(project.len().saturating_sub("/tmp/project".len()))
     );
     insta::assert_snapshot!(
-        "agents_overview_usage",
+        filter_hint_snapshot_name("agents_overview_usage"),
         render_bottom_popup(&app.chat_widget, /*width*/ 96)
             .replace(&format!("{project}  2"), &group)
             .replace(&project, "/tmp/project")

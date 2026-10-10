@@ -110,7 +110,7 @@ impl super::ChatComposer {
             key_hints: FooterKeyHints {
                 agents: self
                     .agents_navigation_available()
-                    .then_some(key_hint::plain(KeyCode::Left).into()),
+                    .then_some(crate::bottom_pane::agents_navigation_shortcut_key().into()),
                 toggle_shortcuts: self.footer.toggle_shortcuts_key,
                 queue: self.footer.queue_key,
                 insert_newline: self.footer.insert_newline_key,

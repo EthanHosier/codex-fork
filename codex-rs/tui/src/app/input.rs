@@ -584,8 +584,7 @@ impl App {
             && self.chat_widget.no_modal_or_popup_active()
         {
             if key_event.kind == KeyEventKind::Press
-                && key_event.code == KeyCode::Left
-                && key_event.modifiers == KeyModifiers::NONE
+                && crate::bottom_pane::agents_navigation_shortcut_key().is_press(key_event)
                 && self.chat_widget.agents_navigation_key_available()
                 && !matches!(self.app_server_target, AppServerTarget::Embedded)
             {

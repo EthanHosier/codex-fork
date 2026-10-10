@@ -144,7 +144,7 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
         }
         view.handle_key_event(KeyCode::F(8).into());
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id }) if thread_id == target)
+            matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id, .. }) if thread_id == target)
         );
         view.handle_key_event(KeyCode::F(7).into());
         assert!(
@@ -153,6 +153,137 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
         assert!(rx.try_recv().is_err());
         view.handle_key_event(KeyCode::Esc.into());
     }
+}
+
+#[cfg(feature = "custom-agents-overview")]
+#[test]
+fn d_confirms_removing_a_my_agent_without_deleting_its_thread() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(d_confirms_removing_a_my_agent_without_deleting_its_thread_inner())
+        })
+        .expect("test thread starts")
+        .join()
+        .expect("test thread does not panic")?;
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn d_confirms_removing_a_my_agent_without_deleting_its_thread_inner() -> Result<()> {
+    let (mut app, mut rx, _op_rx) = crate::app::tests::make_test_app_with_channels().await;
+    let id = ThreadId::from_u128(/*value*/ 420);
+    app.local_settings.tui.my_agents = vec![id.to_string()];
+    app.agents_overview.threads.insert(
+        id,
+        Some(overview_thread(
+            id,
+            /*parent_thread_id*/ None,
+            "Named agent",
+            ThreadStatus::Idle,
+        )),
+    );
+    let mut view = app.agents_overview_view(
+        vec![
+            app.agents_overview.threads[&id]
+                .as_ref()
+                .expect("thread fixture")
+                .clone(),
+        ],
+        Some(id),
+    );
+    assert!(view.my_agents.contains(&id));
+    app.agents_overview.visible_thread_ids = view.thread_ids();
+    view.handle_key_event(KeyCode::Down.into());
+    view.handle_key_event(KeyCode::Char('d').into());
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let prompt = rx
+        .try_recv()
+        .expect("d should open the remove-from-view prompt");
+    Box::pin(app.handle_event(&mut tui, &mut app_server, prompt)).await?;
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 96).contains("Remove from My agents"));
+
+    // The confirmation view offers Cancel first and Remove second.
+    app.chat_widget.handle_key_event(KeyCode::Down.into());
+    app.chat_widget.handle_key_event(KeyCode::Enter.into());
+    while let Ok(event) = rx.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    }
+    assert!(!app.local_settings.tui.my_agents.contains(&id.to_string()));
+    assert!(app.agents_overview.threads.contains_key(&id));
+
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
+#[test]
+fn m_adds_selected_task_to_my_agents_from_another_tab() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(m_adds_selected_task_to_my_agents_from_another_tab_inner())
+        })
+        .expect("test thread starts")
+        .join()
+        .expect("test thread does not panic")?;
+    Ok(())
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn m_adds_selected_task_to_my_agents_from_another_tab_inner() -> Result<()> {
+    let (mut app, mut rx, _op_rx) = crate::app::tests::make_test_app_with_channels().await;
+    let id = ThreadId::from_u128(/*value*/ 422);
+    let thread = overview_thread(
+        id,
+        /*parent_thread_id*/ None,
+        "Ordinary session",
+        ThreadStatus::Idle,
+    );
+    let mut view = app.agents_overview_view(vec![thread], Some(id));
+    // The tabs are My agents, Needs you, Working, Ready, then All.
+    for _ in 0..4 {
+        view.handle_key_event(KeyCode::Right.into());
+    }
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+
+    let hints = render_bottom_popup(&app.chat_widget, /*width*/ 96);
+    assert!(hints.contains("m add to My agents"), "{hints}");
+    assert!(
+        hints.rfind("m add to My agents") > hints.rfind("n new"),
+        "{hints}"
+    );
+    app.chat_widget.handle_key_event(KeyCode::Char('m').into());
+    let event = rx.try_recv().expect("m should add the selected task");
+    assert!(matches!(event, AppEvent::AddMyAgent { thread_id } if thread_id == id));
+
+    let home = tempfile::tempdir()?;
+    let config_path = home.path().join("config.toml");
+    std::fs::write(&config_path, "[tui]\n")?;
+    app.local_settings.user_config_path = AbsolutePathBuf::try_from(config_path.clone())?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
+    assert!(app.local_settings.tui.my_agents.contains(&id.to_string()));
+    app.chat_widget.handle_key_event(KeyCode::Char('m').into());
+    assert!(
+        rx.try_recv().is_err(),
+        "m should not add an existing member again"
+    );
+    let persisted = std::fs::read_to_string(config_path)?;
+    assert!(persisted.contains(&id.to_string()), "{persisted}");
+    assert_eq!(persisted.matches(&id.to_string()).count(), 1, "{persisted}");
+    app_server.shutdown().await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -1089,6 +1220,50 @@ async fn fork_shortcut_respects_metadata_editing() {
     }
     view.handle_key_event(KeyCode::Char('f').into());
     assert!(
-        matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id }) if thread_id == target)
+        matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id, .. }) if thread_id == target)
     );
+}
+
+#[cfg(feature = "custom-agents-overview")]
+#[tokio::test]
+async fn overview_fork_carries_name_from_every_tab_and_membership_only_from_my_agents() {
+    let (mut app, mut rx, _op_rx) = crate::app::tests::make_test_app_with_channels().await;
+    let target = ThreadId::from_u128(/*value*/ 423);
+    let mut thread = overview_thread(
+        target,
+        /*parent_thread_id*/ None,
+        "Named agent",
+        ThreadStatus::Idle,
+    );
+    thread.name = Some("Named agent".to_string());
+    app.local_settings.tui.my_agents = vec![target.to_string()];
+    let mut view = app.agents_overview_view(vec![thread], Some(target));
+
+    view.handle_key_event(KeyCode::Down.into());
+    view.handle_key_event(KeyCode::Char('f').into());
+    let my_agents_fork = rx.try_recv().expect("fork key emits an overview event");
+    assert!(matches!(
+        my_agents_fork,
+        AppEvent::ForkAgentsOverviewThread {
+            thread_id,
+            fork_name: Some(fork_name),
+            add_to_my_agents: true,
+        } if thread_id == target && fork_name == "Named agent (fork)"
+    ));
+
+    // All is the final tab. Its forks should get the same suffix without joining My agents.
+    for _ in 0..4 {
+        view.handle_key_event(KeyCode::Right.into());
+    }
+    view.handle_key_event(KeyCode::Down.into());
+    view.handle_key_event(KeyCode::Char('f').into());
+    let all_tab_fork = rx.try_recv().expect("fork key emits an overview event");
+    assert!(matches!(
+        all_tab_fork,
+        AppEvent::ForkAgentsOverviewThread {
+            thread_id,
+            fork_name: Some(fork_name),
+            add_to_my_agents: false,
+        } if thread_id == target && fork_name == "Named agent (fork)"
+    ));
 }

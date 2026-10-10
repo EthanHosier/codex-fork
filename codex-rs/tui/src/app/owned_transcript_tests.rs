@@ -74,8 +74,21 @@ pub(in crate::app) fn buffer_text(buffer: &Buffer) -> String {
         .join("\n")
 }
 
-#[tokio::test]
-async fn external_writer_escape_returns_to_command_center_without_editing() -> Result<()> {
+#[test]
+fn external_writer_escape_returns_to_command_center_without_editing() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(external_writer_escape_returns_to_command_center_without_editing_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("external writer Escape test thread panicked"))?
+}
+
+async fn external_writer_escape_returns_to_command_center_without_editing_inner() -> Result<()> {
     for (detailed, scrolled, offline) in [
         (false, false, false),
         (false, true, false),
@@ -124,7 +137,11 @@ async fn external_writer_escape_returns_to_command_center_without_editing() -> R
             assert!(app.agents_overview.request_id.is_none());
             assert!(app.reconnect.presentation == reconnect::ReconnectPresentation::Overview);
             insta::assert_snapshot!(
-                "external_writer_escape_offline_command_center",
+                if cfg!(feature = "custom-agents-overview") {
+                    "external_writer_escape_offline_command_center_arrow_filters"
+                } else {
+                    "external_writer_escape_offline_command_center"
+                },
                 crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(
                     crate::chatwidget::tests::helpers::render_bottom_popup(
                         &app.chat_widget,
@@ -134,7 +151,11 @@ async fn external_writer_escape_returns_to_command_center_without_editing() -> R
             );
         } else if !detailed && !scrolled {
             insta::assert_snapshot!(
-                "external_writer_escape_command_center",
+                if cfg!(feature = "custom-agents-overview") {
+                    "external_writer_escape_command_center_arrow_filters"
+                } else {
+                    "external_writer_escape_command_center"
+                },
                 crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(
                     crate::chatwidget::tests::helpers::render_bottom_popup(
                         &app.chat_widget,

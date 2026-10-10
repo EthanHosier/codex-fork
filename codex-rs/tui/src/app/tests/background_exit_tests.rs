@@ -110,8 +110,23 @@ async fn external_writer_view_preserves_draft_from_keys_and_paste() -> Result<()
     Ok(())
 }
 
-#[tokio::test]
-async fn external_writer_view_opens_agents_with_left() -> Result<()> {
+#[test]
+#[cfg(not(feature = "custom-agents-overview"))]
+fn external_writer_view_opens_agents_with_left() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(external_writer_view_opens_agents_with_left_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("external writer Left test thread panicked"))?
+}
+
+#[cfg(not(feature = "custom-agents-overview"))]
+async fn external_writer_view_opens_agents_with_left_inner() -> Result<()> {
     for offline in [false, true] {
         let (mut app, _, _) = make_test_app_with_channels().await;
         app.app_server_target = AppServerTarget::Remote {
@@ -146,7 +161,76 @@ async fn external_writer_view_opens_agents_with_left() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[cfg(feature = "custom-agents-overview")]
+fn external_writer_view_opens_agents_only_with_ctrl_q() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(external_writer_view_opens_agents_only_with_ctrl_q_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("external writer agents test thread panicked"))?
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn external_writer_view_opens_agents_only_with_ctrl_q_inner() -> Result<()> {
+    for offline in [false, true] {
+        let (mut app, _, _) = make_test_app_with_channels().await;
+        app.app_server_target = AppServerTarget::Remote {
+            endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
+        };
+        app.chat_widget.insert_str("Retained draft");
+        app.chat_widget.show_external_writer_thread();
+        app.reconnect.offline = offline;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.set_owned_screen(/*owned*/ true)?;
+
+        assert!(
+            app.chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .is_none(),
+            "overview unexpectedly present before shortcut test"
+        );
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Key(KeyCode::Left.into()),
+        )
+        .await?;
+        assert!(
+            app.chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .is_none()
+        );
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+        )
+        .await?;
+
+        assert!(
+            app.chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
+                .is_some()
+        );
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "Retained draft"
+        );
+        tui.set_owned_screen(/*owned*/ false)?;
+        app_server.shutdown().await?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
+#[cfg(not(feature = "custom-agents-overview"))]
 async fn external_writer_view_respects_remapped_left() -> Result<()> {
     let config: codex_config::types::TuiKeymap = toml::from_str(
         "[global]\nopen_transcript = 'left'\n[editor]\nmove_left = 'ctrl-b'\n[list]\nmove_left = 'ctrl-h'\n",

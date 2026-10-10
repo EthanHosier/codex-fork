@@ -37,11 +37,23 @@ impl App {
         self.show_agents_overview_error(title, format!("{reason} A checkout was retained at {}; remove it with `git worktree remove <checkout-path>` from the source repository if it is no longer needed.", checkout.root.display()));
     }
 
+    #[cfg(any(not(feature = "custom-agents-overview"), test))]
     pub(in crate::app) async fn new_agents_overview_session(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         cwd: Option<AbsolutePathBuf>,
+    ) -> Result<AppRunControl> {
+        self.new_agents_overview_session_with_name(tui, app_server, cwd, None)
+            .await
+    }
+
+    pub(in crate::app) async fn new_agents_overview_session_with_name(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        cwd: Option<AbsolutePathBuf>,
+        name: Option<String>,
     ) -> Result<AppRunControl> {
         if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
             return Ok(AppRunControl::Continue);
@@ -72,6 +84,7 @@ impl App {
             tui,
             app_server,
             cwd,
+            name,
             /*managed_worktree*/ None,
             Some(&mut draft),
         ))
@@ -97,12 +110,17 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         cwd: Option<AbsolutePathBuf>,
+        name: Option<String>,
         managed_worktree: Option<(
             codex_worktree::WorktreeManager,
             codex_worktree::ManagedWorktree,
         )>,
         mut startup_draft: Option<&mut StartupDraftPump>,
     ) -> Result<AppRunControl> {
+        #[cfg(feature = "custom-agents-overview")]
+        let add_to_my_agents = name.is_some();
+        #[cfg(feature = "custom-agents-overview")]
+        let my_agents_config_path = self.local_settings.user_config_path.clone();
         if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
             if let Some((_, checkout)) = &managed_worktree {
                 self.agents_overview_retained_worktree_error(
@@ -164,7 +182,7 @@ impl App {
             )),
         )
         .await;
-        let started = match result {
+        let mut started = match result {
             Ok(started) => started,
             Err(error) => {
                 // Older servers omit the reason. Only use their specific message when
@@ -200,6 +218,14 @@ impl App {
             }
         };
         let thread_id = started.session.thread_id;
+        if let Some(name) = name {
+            if let Err(error) = app_server.thread_set_name(thread_id, name.clone()).await {
+                let _ = app_server.thread_unsubscribe(thread_id).await;
+                self.add_agents_overview_error(format!("Failed to name the new session: {error}"));
+                return Ok(AppRunControl::Continue);
+            }
+            started.session.thread_name = Some(name);
+        }
         if let Some(selected) = selected_profile {
             self.agents_overview
                 .selected_permission_profiles
@@ -243,6 +269,26 @@ impl App {
                     /*title*/ None,
                     "Could not open the new session.",
                 );
+            }
+        }
+        #[cfg(feature = "custom-agents-overview")]
+        if add_to_my_agents && self.current_displayed_thread_id() == Some(thread_id) {
+            let id = thread_id.to_string();
+            if !self.local_settings.tui.my_agents.contains(&id) {
+                let mut my_agents = self.local_settings.tui.my_agents.clone();
+                my_agents.push(id);
+                match self
+                    .persist_my_agents_config(my_agents_config_path.as_path(), &my_agents)
+                    .await
+                {
+                    Ok(()) => {
+                        self.local_settings.tui.my_agents = my_agents.clone();
+                        self.config.tui_my_agents = my_agents;
+                    }
+                    Err(error) => self.add_agents_overview_error(format!(
+                        "The new agent was created, but could not be added to My agents: {error}"
+                    )),
+                }
             }
         }
         Ok(control)

@@ -134,6 +134,48 @@ async fn command_center_new_keeps_startup_draft_visible_through_handoff() -> Res
     Ok(())
 }
 
+#[cfg(feature = "custom-agents-overview")]
+#[tokio::test]
+async fn named_new_agent_is_persisted_in_my_agents_config() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    let config_path = home.path().join("config.toml");
+    std::fs::write(&config_path, "[tui]\n")?;
+
+    let (mut app, _, _) = make_test_app_with_channels().await;
+    trust_launch_folder(&mut app);
+    app.local_settings.user_config_path = config_path.abs();
+    let mut server = start_config_write_test_app_server(&app).await?;
+    let mut tui = make_test_tui()?;
+    tui.pause_events();
+
+    app.new_agents_overview_session_with_name(
+        &mut tui,
+        &mut server,
+        /*cwd*/ None,
+        Some("Personal Agent".to_string()),
+    )
+    .await?;
+    let thread_id = app
+        .chat_widget
+        .thread_id()
+        .expect("named agent session should be attached");
+    let saved: toml::Value = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let persisted_ids = saved
+        .get("tui")
+        .and_then(|tui| tui.get("my_agents"))
+        .and_then(toml::Value::as_array)
+        .unwrap_or_else(|| panic!("my_agents should be persisted as a TOML list: {saved}"));
+    assert!(
+        persisted_ids
+            .iter()
+            .any(|id| id.as_str() == Some(&thread_id.to_string())),
+        "created thread {thread_id} is missing from {config_path:?}: {saved}"
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn review_regression_agents_overview_creation_is_fresh_but_returning_is_not() -> Result<()> {
     let render = |chat: &ChatWidget| {
@@ -1294,6 +1336,7 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
                 &mut tui,
                 &mut failed_server,
                 Some(unused.cwd.clone().abs()),
+                None,
                 Some((manager.clone(), unused.clone())),
                 /*startup_draft*/ None,
             )

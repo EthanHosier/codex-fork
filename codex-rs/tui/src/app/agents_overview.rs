@@ -415,6 +415,16 @@ impl App {
             self.keymap.clone(),
             Arc::clone(&self.agents_overview.view_state),
         );
+        #[cfg(feature = "custom-agents-overview")]
+        {
+            view.my_agents = self
+                .local_settings
+                .tui
+                .my_agents
+                .iter()
+                .filter_map(|id| ThreadId::from_string(id).ok())
+                .collect();
+        }
         view.pinned_thread_ranks = self.agents_overview.pinned_thread_ids.as_ref().map(|ids| {
             ids.iter()
                 .copied()

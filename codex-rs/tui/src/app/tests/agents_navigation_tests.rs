@@ -1,8 +1,21 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-#[tokio::test]
-async fn agents_navigation_requires_local_daemon() -> Result<()> {
+#[test]
+fn agents_navigation_requires_local_daemon() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(agents_navigation_requires_local_daemon_inner())
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("agents navigation test thread panicked"))?
+}
+
+async fn agents_navigation_requires_local_daemon_inner() -> Result<()> {
     let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let mut app_server = start_config_write_test_app_server(&app).await?;
@@ -28,12 +41,12 @@ async fn agents_navigation_requires_local_daemon() -> Result<()> {
         );
         app.replace_chat_widget(ChatWidget::new_with_app_event(init));
         while events.try_recv().is_ok() {}
-        app.handle_tui_event(
-            &mut tui,
-            &mut app_server,
-            TuiEvent::Key(KeyCode::Left.into()),
-        )
-        .await?;
+        app.chat_widget
+            .handle_key_event(if cfg!(feature = "custom-agents-overview") {
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)
+            } else {
+                KeyCode::Left.into()
+            });
         if enabled {
             let event = events.try_recv()?;
             assert_matches!(event, AppEvent::OpenAgentsOverview);

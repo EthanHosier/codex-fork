@@ -42,7 +42,15 @@ impl AgentsOverviewView {
     }
 
     pub(super) fn center_filter_hint(&self) -> String {
-        [key_hint::plain(KeyCode::Tab), key_hint::shift(KeyCode::Tab)]
+        let hints = if cfg!(feature = "custom-agents-overview") {
+            [
+                key_hint::plain(KeyCode::Left),
+                key_hint::plain(KeyCode::Right),
+            ]
+        } else {
+            [key_hint::plain(KeyCode::Tab), key_hint::shift(KeyCode::Tab)]
+        };
+        hints
             .into_iter()
             .filter(|hint| {
                 let (code, modifiers) = hint.parts();
@@ -169,7 +177,9 @@ impl AgentsOverviewView {
         if let Some(hint) = self.center_list_hint(ListAction::Accept) {
             hints.push((
                 hint.display_label(),
-                if state.rename_target.is_some() {
+                if state.new_session_name_editing {
+                    "create"
+                } else if state.rename_target.is_some() {
                     "rename"
                 } else {
                     "open"
@@ -183,6 +193,14 @@ impl AgentsOverviewView {
                 .primary_hint("new_task", &self.agents_keymap.new_task)
         {
             hints.push((hint.display_label(), "new".into()));
+        }
+        #[cfg(feature = "custom-agents-overview")]
+        if !state.editing_metadata() {
+            if state.status_filter == 0 {
+                hints.push(("d".into(), "remove".into()));
+            } else {
+                hints.push(("m".into(), "add to My agents".into()));
+            }
         }
         hints
     }
