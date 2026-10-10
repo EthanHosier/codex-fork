@@ -196,17 +196,32 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
         /*has_chatgpt_account*/ false,
         /*has_codex_backend_auth*/ false,
     );
-    assert!(
-        !app.chat_widget
-            .set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ false,)
-    );
-    app.submit_thread_op(&mut server, thread_id, turn.clone())
-        .await?;
-    app.chat_widget.set_daybreak_enabled(/*enabled*/ false);
-    app.submit_thread_op(&mut server, thread_id, turn).await?;
+    assert!(!app.chat_widget.daybreak_enabled);
+    for (cli_daybreak, api_key_cyber_access_programs, enabled) in [
+        (false, false, true),
+        (false, true, true),
+        (true, false, true),
+        (true, true, true),
+        (true, true, false),
+    ] {
+        app.chat_widget
+            .set_feature_enabled(Feature::CliDaybreak, cli_daybreak);
+        app.chat_widget.set_feature_enabled(
+            Feature::ApiKeyCyberAccessPrograms,
+            api_key_cyber_access_programs,
+        );
+        app.chat_widget.set_daybreak_enabled(enabled);
+        app.submit_thread_op(&mut server, thread_id, turn.clone())
+            .await?;
+    }
     let turns = recorded_params(&requests, "turn/start");
-    assert_eq!(turns[5]["cyberAccessProgram"], "daybreakBlue");
-    assert!(turns[6]["cyberAccessProgram"].is_null());
+    assert_eq!(
+        turns[5..]
+            .iter()
+            .map(|turn| turn["cyberAccessProgram"].as_str())
+            .collect::<Vec<_>>(),
+        vec![None, None, None, Some("daybreakBlue"), Some("standard")]
+    );
     while events.try_recv().is_ok() {}
 
     let missing_thread_id = ThreadId::new();
@@ -334,6 +349,8 @@ pub(super) enum HistoryCapabilities {
     ItemsAndSummaryTurnsFail,
     ThreadListFails,
     ThreadStartFails,
+    ThreadStartWhileShuttingDown,
+    ThreadStartDuringLegacyShutdown,
     ConfigReadUnsupported(i64),
     ConfigReadFails,
     ConfigReadUnknownVoice,
@@ -622,15 +639,30 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 message: "method not found".to_string(),
                             },
                         })
-                    } else if history_capabilities == HistoryCapabilities::ThreadStartFails
-                        && request.method == "thread/start"
+                    } else if matches!(
+                        history_capabilities,
+                        HistoryCapabilities::ThreadStartFails
+                            | HistoryCapabilities::ThreadStartWhileShuttingDown
+                            | HistoryCapabilities::ThreadStartDuringLegacyShutdown
+                    ) && request.method == "thread/start"
                     {
+                        let (code, message, data) = match history_capabilities {
+                            HistoryCapabilities::ThreadStartWhileShuttingDown => (
+                                -32600,
+                                "not accepting new actions",
+                                Some(serde_json::json!({ "reason": "serverShuttingDown" })),
+                            ),
+                            HistoryCapabilities::ThreadStartDuringLegacyShutdown => {
+                                (-32600, "Server is draining; retry after reconnecting", None)
+                            }
+                            _ => (-32603, "replacement unavailable", None),
+                        };
                         JSONRPCMessage::Error(JSONRPCError {
                             id: request_id,
                             error: JSONRPCErrorError {
-                                code: -32603,
-                                data: None,
-                                message: "replacement unavailable".to_string(),
+                                code,
+                                data,
+                                message: message.to_string(),
                             },
                         })
                     } else if request.method == "thread/list"

@@ -1124,6 +1124,17 @@ impl App {
                     self.active_thread_id = visible_thread;
                 }
                 if let Err(err) = result {
+                    if is_realtime_stop {
+                        let chat_widget = match self.background_voice.as_deref_mut() {
+                            Some(owner) if parked_voice => owner,
+                            _ => &mut self.chat_widget,
+                        };
+                        if chat_widget.thread_id() == realtime_stop_thread_id {
+                            chat_widget.record_realtime_failure(
+                                crate::chatwidget::RealtimeFailureCause::AppServerRequest,
+                            );
+                        }
+                    }
                     if self.recover_transport_error(&err) {
                         return Ok(AppRunControl::Continue);
                     }
@@ -1150,12 +1161,14 @@ impl App {
                         let message = format!("Voice conversation failed: {err:#}");
                         if is_realtime_stop {
                             if chat_widget.thread_id() == realtime_stop_thread_id {
-                                chat_widget.record_realtime_failure();
                                 chat_widget.reset_realtime_conversation();
                                 chat_widget.add_realtime_error(message);
                             }
                         } else {
-                            chat_widget.on_realtime_error(message);
+                            chat_widget.on_realtime_error(
+                                message,
+                                crate::chatwidget::RealtimeFailureCause::AppServerRequest,
+                            );
                         }
                         tracing::error!(error = ?err, "realtime conversation request failed");
                     } else if handled {
@@ -2961,7 +2974,7 @@ impl App {
                 );
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
+                self.select_agent_thread(tui, app_server, thread_id)
                     .await?;
             }
             AppEvent::StartSide {
@@ -3579,6 +3592,16 @@ impl App {
                 // its shutdown completion does not trigger agent failover.
                 self.pending_shutdown_exit_thread_id =
                     self.active_thread_id.or(self.chat_widget.thread_id());
+                if !self.side_threads.is_empty()
+                    && tokio::time::timeout(
+                        SHUTDOWN_FIRST_EXIT_TIMEOUT,
+                        self.shutdown_side_threads(app_server),
+                    )
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("timed out waiting for side-conversation shutdown");
+                }
                 if self.pending_shutdown_exit_thread_id.is_some()
                     || self.voice_owner_thread_id().is_some()
                 {

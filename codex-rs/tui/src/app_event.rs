@@ -69,6 +69,12 @@ use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
 use crate::history_cell::HistoryCell;
 
+#[derive(Debug)]
+pub(crate) struct RealtimeWebrtcStartupFailure {
+    pub message: String,
+    pub cause: codex_realtime_webrtc::ConnectionError,
+}
+
 /// Global voice controls always apply to the one call's owner.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum VoiceControl {
@@ -240,11 +246,12 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
-/// Number of key strokes recorded by one `/keymap` capture.
+/// Kind of shortcut recorded by one `/keymap` capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeymapCaptureMode {
     SingleKey,
     Chord,
+    LeaderChord,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1232,7 +1239,7 @@ pub(crate) enum AppEvent {
     RealtimeWebrtcOfferCreated {
         thread_id: ThreadId,
         attempt_id: u64,
-        result: Result<StartedRealtimeWebrtcSession, String>,
+        result: Result<StartedRealtimeWebrtcSession, RealtimeWebrtcStartupFailure>,
     },
 
     /// Result of establishing the WebRTC connection for an active voice attempt.
