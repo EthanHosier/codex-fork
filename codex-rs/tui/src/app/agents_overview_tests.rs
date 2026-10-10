@@ -2818,6 +2818,90 @@ async fn command_center_action_failures_remain_visible() -> Result<()> {
 #[path = "agents_overview_actions_tests.rs"]
 mod actions;
 
+#[cfg(feature = "custom-agents-overview")]
+#[test]
+fn overview_forks_are_suffixed_and_only_my_agents_forks_are_persisted() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(
+                    overview_forks_are_suffixed_and_only_my_agents_forks_are_persisted_inner(),
+                )
+        })?
+        .join()
+        .map_err(|_| color_eyre::eyre::eyre!("overview fork test thread panicked"))?
+}
+
+#[cfg(feature = "custom-agents-overview")]
+async fn overview_forks_are_suffixed_and_only_my_agents_forks_are_persisted_inner() -> Result<()> {
+    let (app, _events, _operations) = make_test_app_with_channels().await;
+    let mut app = Box::pin(app);
+    let home = tempfile::tempdir()?;
+    let config_path = home.path().join("config.toml");
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+
+    let my_source = server.start_thread(&app.config).await?;
+    let my_source_id = my_source.session.thread_id;
+    server
+        .thread_set_name(my_source_id, "Named agent".to_string())
+        .await?;
+    let other_source = server.start_thread(&app.config).await?;
+    let other_source_id = other_source.session.thread_id;
+    server
+        .thread_set_name(other_source_id, "Other session".to_string())
+        .await?;
+
+    app.local_settings.user_config_path = AbsolutePathBuf::try_from(config_path.clone())?;
+    app.local_settings.tui.my_agents = vec![my_source_id.to_string()];
+    app.config.tui_my_agents = app.local_settings.tui.my_agents.clone();
+    std::fs::write(
+        &config_path,
+        format!("[tui]\nmy_agents = [\"{my_source_id}\"]\n"),
+    )?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut outcomes = Vec::new();
+
+    for (source_id, source_name, add_to_my_agents) in [
+        (my_source_id, "Named agent", true),
+        (other_source_id, "Other session", false),
+    ] {
+        Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, source_id)).await?;
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut server,
+            AppEvent::ForkAgentsOverviewThreadReady {
+                thread_id: source_id,
+                fork_name: Some(format!("{source_name} (fork)")),
+                add_to_my_agents,
+            },
+        ))
+        .await?;
+
+        let fork_id = app.chat_widget.thread_id().expect("fork has a thread id");
+        let fork = server.thread_read(fork_id, /*include_turns*/ false).await?;
+        outcomes.push((
+            fork.name,
+            app.local_settings
+                .tui
+                .my_agents
+                .contains(&fork_id.to_string()),
+        ));
+    }
+
+    assert_eq!(
+        outcomes,
+        vec![
+            (Some("Named agent (fork)".to_string()), true),
+            (Some("Other session (fork)".to_string()), false),
+        ]
+    );
+    server.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn overview_fork_preserves_an_open_side_conversation() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
@@ -2839,6 +2923,10 @@ async fn overview_fork_preserves_an_open_side_conversation() -> Result<()> {
         &mut server,
         AppEvent::ForkAgentsOverviewThread {
             thread_id: ThreadId::new(),
+            #[cfg(feature = "custom-agents-overview")]
+            fork_name: None,
+            #[cfg(feature = "custom-agents-overview")]
+            add_to_my_agents: false,
         },
     ))
     .await?;
@@ -2913,7 +3001,13 @@ async fn overview_fork_keeps_idle_source_input_queued() -> Result<()> {
         Box::pin(app.handle_event(
             &mut tui,
             &mut server,
-            AppEvent::ForkAgentsOverviewThread { thread_id: source },
+            AppEvent::ForkAgentsOverviewThread {
+                thread_id: source,
+                #[cfg(feature = "custom-agents-overview")]
+                fork_name: None,
+                #[cfg(feature = "custom-agents-overview")]
+                add_to_my_agents: false,
+            },
         ))
         .await?;
         assert_eq!(
@@ -2949,7 +3043,13 @@ async fn overview_fork_keeps_idle_source_input_queued() -> Result<()> {
         Box::pin(app.handle_event(
             &mut tui,
             &mut server,
-            AppEvent::ForkAgentsOverviewThreadReady { thread_id: source },
+            AppEvent::ForkAgentsOverviewThreadReady {
+                thread_id: source,
+                #[cfg(feature = "custom-agents-overview")]
+                fork_name: None,
+                #[cfg(feature = "custom-agents-overview")]
+                add_to_my_agents: false,
+            },
         ))
         .await?;
         assert_eq!(app.current_displayed_thread_id(), Some(source));

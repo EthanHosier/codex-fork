@@ -328,10 +328,18 @@ pub(crate) enum AppEvent {
     /// Fork the selected dashboard conversation and open the new session.
     ForkAgentsOverviewThread {
         thread_id: ThreadId,
+        #[cfg(feature = "custom-agents-overview")]
+        fork_name: Option<String>,
+        #[cfg(feature = "custom-agents-overview")]
+        add_to_my_agents: bool,
     },
     /// Run the existing fork action after selection events have been processed.
     ForkAgentsOverviewThreadReady {
         thread_id: ThreadId,
+        #[cfg(feature = "custom-agents-overview")]
+        fork_name: Option<String>,
+        #[cfg(feature = "custom-agents-overview")]
+        add_to_my_agents: bool,
     },
     /// Rename a task directly from the shared dashboard.
     RenameAgentsOverviewThread {

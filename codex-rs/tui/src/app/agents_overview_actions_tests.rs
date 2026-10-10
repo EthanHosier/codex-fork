@@ -144,7 +144,7 @@ async fn lifecycle_shortcuts_target_filtered_task_in_any_state() {
         }
         view.handle_key_event(KeyCode::F(8).into());
         assert!(
-            matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id }) if thread_id == target)
+            matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id, .. }) if thread_id == target)
         );
         view.handle_key_event(KeyCode::F(7).into());
         assert!(
@@ -1220,6 +1220,50 @@ async fn fork_shortcut_respects_metadata_editing() {
     }
     view.handle_key_event(KeyCode::Char('f').into());
     assert!(
-        matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id }) if thread_id == target)
+        matches!(rx.try_recv(), Ok(AppEvent::ForkAgentsOverviewThread { thread_id, .. }) if thread_id == target)
     );
+}
+
+#[cfg(feature = "custom-agents-overview")]
+#[tokio::test]
+async fn overview_fork_carries_name_from_every_tab_and_membership_only_from_my_agents() {
+    let (mut app, mut rx, _op_rx) = crate::app::tests::make_test_app_with_channels().await;
+    let target = ThreadId::from_u128(/*value*/ 423);
+    let mut thread = overview_thread(
+        target,
+        /*parent_thread_id*/ None,
+        "Named agent",
+        ThreadStatus::Idle,
+    );
+    thread.name = Some("Named agent".to_string());
+    app.local_settings.tui.my_agents = vec![target.to_string()];
+    let mut view = app.agents_overview_view(vec![thread], Some(target));
+
+    view.handle_key_event(KeyCode::Down.into());
+    view.handle_key_event(KeyCode::Char('f').into());
+    let my_agents_fork = rx.try_recv().expect("fork key emits an overview event");
+    assert!(matches!(
+        my_agents_fork,
+        AppEvent::ForkAgentsOverviewThread {
+            thread_id,
+            fork_name: Some(fork_name),
+            add_to_my_agents: true,
+        } if thread_id == target && fork_name == "Named agent (fork)"
+    ));
+
+    // All is the final tab. Its forks should get the same suffix without joining My agents.
+    for _ in 0..4 {
+        view.handle_key_event(KeyCode::Right.into());
+    }
+    view.handle_key_event(KeyCode::Down.into());
+    view.handle_key_event(KeyCode::Char('f').into());
+    let all_tab_fork = rx.try_recv().expect("fork key emits an overview event");
+    assert!(matches!(
+        all_tab_fork,
+        AppEvent::ForkAgentsOverviewThread {
+            thread_id,
+            fork_name: Some(fork_name),
+            add_to_my_agents: false,
+        } if thread_id == target && fork_name == "Named agent (fork)"
+    ));
 }

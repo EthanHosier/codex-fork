@@ -763,6 +763,14 @@ impl BottomPaneView for AgentsOverviewView {
             if let Some(row) = self.selected_row() {
                 self.app_event_tx.send(AppEvent::ForkAgentsOverviewThread {
                     thread_id: row.thread_id,
+                    #[cfg(feature = "custom-agents-overview")]
+                    fork_name: row
+                        .thread
+                        .name
+                        .as_deref()
+                        .map(|name| format!("{name} (fork)")),
+                    #[cfg(feature = "custom-agents-overview")]
+                    add_to_my_agents: self.state().status_filter == 0,
                 });
             }
             return;

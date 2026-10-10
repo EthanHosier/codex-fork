@@ -32,7 +32,20 @@ impl App {
         event: AppEvent,
     ) -> Result<AppRunControl> {
         let from_agents_overview = matches!(event, AppEvent::ForkAgentsOverviewThreadReady { .. });
-        let event = if let AppEvent::ForkAgentsOverviewThreadReady { thread_id } = event {
+        #[cfg(feature = "custom-agents-overview")]
+        let mut add_fork_to_my_agents = false;
+        let event = if let AppEvent::ForkAgentsOverviewThreadReady {
+            thread_id,
+            #[cfg(feature = "custom-agents-overview")]
+            fork_name,
+            #[cfg(feature = "custom-agents-overview")]
+            add_to_my_agents,
+        } = event
+        {
+            #[cfg(feature = "custom-agents-overview")]
+            {
+                add_fork_to_my_agents = add_to_my_agents;
+            }
             if self.current_displayed_thread_id() != Some(thread_id)
                 || (self.thread_unavailable(thread_id)
                     && !self.chat_widget.is_external_writer_view())
@@ -40,7 +53,12 @@ impl App {
                 self.chat_widget.fork_in_progress = false;
                 return Ok(AppRunControl::Continue);
             }
-            AppEvent::ForkCurrentSession { name: None }
+            AppEvent::ForkCurrentSession {
+                #[cfg(feature = "custom-agents-overview")]
+                name: fork_name,
+                #[cfg(not(feature = "custom-agents-overview"))]
+                name: None,
+            }
         } else {
             event
         };
@@ -574,6 +592,7 @@ impl App {
                         selected_profile.as_ref(),
                     ).await {
                         Ok(mut forked) => {
+                            let forked_thread_id = forked.session.thread_id;
                             let retained_input = from_locked_thread
                                 .then(|| self.chat_widget.capture_thread_input_state())
                                 .flatten();
@@ -615,6 +634,10 @@ impl App {
                                 Ok(()) => {
                                     if selected_profile.is_some() {
                                         self.adopt_inherited_server_selection();
+                                    }
+                                    #[cfg(feature = "custom-agents-overview")]
+                                    if from_agents_overview && add_fork_to_my_agents {
+                                        self.add_my_agent(forked_thread_id).await;
                                     }
                                     // Keep local input without replacing the fork's running state.
                                     self.chat_widget.restore_reconnected_input(retained_input, &[]);
@@ -2777,7 +2800,13 @@ impl App {
                     AppRunControl::Exit(reason) => return Ok(AppRunControl::Exit(reason)),
                 }
             }
-            AppEvent::ForkAgentsOverviewThread { thread_id } => {
+            AppEvent::ForkAgentsOverviewThread {
+                thread_id,
+                #[cfg(feature = "custom-agents-overview")]
+                fork_name,
+                #[cfg(feature = "custom-agents-overview")]
+                add_to_my_agents,
+            } => {
                 if self.reconnect.offline {
                     return Ok(AppRunControl::Continue);
                 }
@@ -2798,7 +2827,13 @@ impl App {
                     if let Some(input) = self.chat_widget.capture_thread_input_state() {
                         self.agents_overview.input_states.insert(thread_id, input);
                     }
-                    self.app_event_tx.send(AppEvent::ForkAgentsOverviewThreadReady { thread_id });
+                    self.app_event_tx.send(AppEvent::ForkAgentsOverviewThreadReady {
+                        thread_id,
+                        #[cfg(feature = "custom-agents-overview")]
+                        fork_name,
+                        #[cfg(feature = "custom-agents-overview")]
+                        add_to_my_agents,
+                    });
                 } else {
                     self.chat_widget.fork_in_progress = false;
                 }
