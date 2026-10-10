@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
@@ -40,6 +41,7 @@ use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use supports_color::Stream;
 
 #[cfg(all(
@@ -53,6 +55,9 @@ static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
 mod cloud_config;
+#[cfg(test)]
+#[path = "configure_qlm_tests.rs"]
+mod configure_qlm_tests;
 mod daemon_install;
 mod daemon_telemetry;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -95,6 +100,7 @@ use codex_core::build_models_manager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::resolve_profile_v2_config_path;
@@ -102,6 +108,9 @@ use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_home::CodexHomeUserInstructionsProvider;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
 use codex_login::is_workload_identity_selected;
 use codex_memories_write::clear_memory_roots_contents;
@@ -110,6 +119,15 @@ use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
+
+const API_KEY_ENV: &str = "CODEX_QLM_API_KEY";
+const BASE_URL: &str = "https://qlm.eu-west-1.qrt.cloud/openai";
+const MODEL: &str = "bedrock/gpt-5.6-sol";
+const PROVIDER_ID: &str = "qlm";
+const PROVIDER_NAME: &str = "QLM";
+const WIRE_API: &str = "responses";
+const BASE_URL_OVERRIDE_ENV: &str = "CODEX_QLM_BASE_URL";
+const QLM_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Codex CLI
 ///
@@ -127,6 +145,10 @@ use codex_terminal_detection::TerminalName;
     override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
+    /// Verify and configure the QLM model provider.
+    #[clap(long)]
+    configure_qlm: bool,
+
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
 
@@ -1043,12 +1065,18 @@ async fn cli_main(
     remote_control_disabled: bool,
 ) -> anyhow::Result<()> {
     let MultitoolCli {
+        configure_qlm,
         config_overrides: mut root_config_overrides,
         feature_toggles,
         remote,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
+
+    if configure_qlm {
+        configure_qlm_command().await?;
+        return Ok(());
+    }
     // Retain the launch target through TUI exit, even if a launcher changes selection.
     let daemon_cli_executable = arg0_paths
         .codex_self_exe
@@ -1880,6 +1908,109 @@ async fn cli_main(
         },
     }
 
+    Ok(())
+}
+
+async fn configure_qlm_command() -> anyhow::Result<()> {
+    let api_key = std::env::var(API_KEY_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{API_KEY_ENV} is not set or is empty"))?;
+
+    let codex_home = find_codex_home()?;
+    let config_path = codex_home.join(codex_config::CONFIG_TOML_FILE);
+    let existing_config = match std::fs::read_to_string(&config_path) {
+        Ok(contents) => toml::from_str::<toml::Value>(&contents)
+            .context("failed to parse existing config.toml")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            toml::Value::Table(Default::default())
+        }
+        Err(error) => return Err(error).context("failed to read config.toml"),
+    };
+
+    let base_url = std::env::var(BASE_URL_OVERRIDE_ENV).ok().or_else(|| {
+        config_value_at_path(
+            &existing_config,
+            &["model_providers", PROVIDER_ID, "base_url"],
+        )
+        .and_then(toml::Value::as_str)
+        .map(ToOwned::to_owned)
+    });
+    let base_url = base_url.unwrap_or_else(|| BASE_URL.to_string());
+    let model = config_value_at_path(&existing_config, &["model"])
+        .and_then(toml::Value::as_str)
+        .unwrap_or(MODEL);
+    verify_qlm_endpoint(&base_url, model, &api_key).await?;
+
+    let settings: &[(&[&str], &str)] = &[
+        (&["model_provider"], PROVIDER_ID),
+        (&["model"], MODEL),
+        (&["model_providers", PROVIDER_ID, "name"], PROVIDER_NAME),
+        (
+            &["model_providers", PROVIDER_ID, "base_url"],
+            base_url.as_str(),
+        ),
+        (&["model_providers", PROVIDER_ID, "env_key"], API_KEY_ENV),
+        (&["model_providers", PROVIDER_ID, "wire_api"], WIRE_API),
+    ];
+    let edits = settings
+        .iter()
+        .filter(|(segments, _)| config_value_at_path(&existing_config, segments).is_none())
+        .map(|(segments, setting)| ConfigEdit::SetPath {
+            segments: segments
+                .iter()
+                .map(|segment| (*segment).to_string())
+                .collect(),
+            value: toml_edit::value(*setting),
+        })
+        .collect::<Vec<_>>();
+    if edits.is_empty() {
+        println!("QLM provider is already configured.");
+    } else {
+        ConfigEditsBuilder::new(&codex_home)
+            .with_edits(edits)
+            .apply()
+            .await?;
+        println!("QLM provider verified and saved to config.toml.");
+    }
+    Ok(())
+}
+
+fn config_value_at_path<'a>(config: &'a toml::Value, segments: &[&str]) -> Option<&'a toml::Value> {
+    segments
+        .iter()
+        .try_fold(config, |value, segment| value.get(*segment))
+}
+
+async fn verify_qlm_endpoint(base_url: &str, model: &str, api_key: &str) -> anyhow::Result<()> {
+    let endpoint = format!("{}/responses", base_url.trim_end_matches('/'));
+    let client = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+        .build_client(&endpoint, ClientRouteClass::Api)
+        .context("failed to create QLM HTTP client")?;
+    let response = client
+        .post(endpoint)
+        .bearer_auth(api_key)
+        .timeout(QLM_PROBE_TIMEOUT)
+        .json(&serde_json::json!({
+            "model": model,
+            "input": "Reply with OK.",
+            "stream": true,
+            "max_output_tokens": 16,
+        }))
+        .send()
+        .await
+        .context("failed to send QLM Responses API test request")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to read QLM Responses API test response")?;
+    if !status.is_success() {
+        anyhow::bail!("QLM test request failed with HTTP {status}: {body}");
+    }
+    if !body.contains("response.completed") {
+        anyhow::bail!("QLM test request returned without a completed response");
+    }
     Ok(())
 }
 
@@ -2926,6 +3057,7 @@ enabled = true
             subcommand,
             feature_toggles: _,
             remote: _,
+            configure_qlm: _,
         } = cli;
         interactive
             .shared
@@ -2963,6 +3095,7 @@ enabled = true
             subcommand,
             feature_toggles: _,
             remote: _,
+            configure_qlm: _,
         } = cli;
         interactive
             .shared
@@ -3007,6 +3140,7 @@ enabled = true
             subcommand,
             feature_toggles: _,
             remote: _,
+            configure_qlm: _,
         } = cli;
 
         let Subcommand::Archive(SessionArchiveCommand {
