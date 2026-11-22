@@ -85,6 +85,10 @@ impl DynamicToolHandler {
 }
 
 impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
+
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
     }
@@ -142,7 +146,7 @@ impl DynamicToolHandler {
         let response = request_dynamic_tool(
             &session,
             turn.as_ref(),
-            call_id,
+            call_id.into(),
             self.tool_name.clone(),
             args,
             cancellation_token,

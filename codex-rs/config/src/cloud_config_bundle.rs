@@ -175,6 +175,7 @@ pub struct CloudConfigBundleLoadError {
     code: CloudConfigBundleLoadErrorCode,
     message: String,
     status_code: Option<u16>,
+    login_required: bool,
 }
 
 impl CloudConfigBundleLoadError {
@@ -187,7 +188,24 @@ impl CloudConfigBundleLoadError {
             code,
             message: message.into(),
             status_code,
+            login_required: false,
         }
+    }
+
+    pub fn login_required(message: impl Into<String>) -> Self {
+        Self {
+            login_required: true,
+            ..Self::new(
+                CloudConfigBundleLoadErrorCode::Auth,
+                /*status_code*/ None,
+                message,
+            )
+        }
+    }
+
+    pub fn requires_login(&self) -> bool {
+        self.login_required
+            || (self.code == CloudConfigBundleLoadErrorCode::Auth && self.status_code == Some(401))
     }
 
     pub fn code(&self) -> CloudConfigBundleLoadErrorCode {
@@ -343,6 +361,19 @@ pub enum CloudConfigBundleBindingStatus {
 }
 
 impl CloudConfigBundleBinding {
+    /// Wait until this delivered policy no longer authorizes its EMA owner.
+    pub async fn invalidated(&self) {
+        let mut changes = self.policy.0.subscribe();
+        loop {
+            if self.read().status != CloudConfigBundleBindingStatus::Current {
+                return;
+            }
+            if changes.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
     /// Keeps the policy observation stable until this guard is dropped.
     pub fn read(&self) -> CloudConfigBundleBindingGuard<'_> {
         let state = self.policy.0.borrow();
@@ -385,6 +416,7 @@ impl CloudConfigBundlePolicyChanges {
 pub struct CloudConfigBundleSnapshot {
     pub bundle: Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>,
     pub binding: Option<CloudConfigBundleBinding>,
+    pub config_server: Option<crate::ConfigServer>,
 }
 
 type CloudConfigBundleSnapshotGetter =
@@ -395,6 +427,7 @@ pub struct CloudConfigBundleLoader {
     getter: Arc<CloudConfigBundleGetter>,
     snapshot_getter: Option<Arc<CloudConfigBundleSnapshotGetter>>,
     ema_policy: Option<CloudConfigBundlePolicy>,
+    config_server: Option<crate::ConfigServer>,
 }
 
 impl CloudConfigBundleLoader {
@@ -420,6 +453,7 @@ impl CloudConfigBundleLoader {
             getter: Arc::new(move || getter().boxed()),
             snapshot_getter: None,
             ema_policy: None,
+            config_server: None,
         }
     }
 
@@ -427,6 +461,7 @@ impl CloudConfigBundleLoader {
     pub fn from_snapshot(snapshot: CloudConfigBundleSnapshot) -> Self {
         let bundle = snapshot.bundle.clone();
         let mut loader = Self::from_getter(move || std::future::ready(bundle.clone()));
+        loader.config_server = snapshot.config_server.clone();
         loader.ema_policy = snapshot
             .binding
             .as_ref()
@@ -452,13 +487,27 @@ impl CloudConfigBundleLoader {
     }
 
     pub async fn get_snapshot(&self) -> CloudConfigBundleSnapshot {
-        match &self.snapshot_getter {
+        let mut snapshot = match &self.snapshot_getter {
             Some(getter) => getter().await,
             None => CloudConfigBundleSnapshot {
                 bundle: self.get().await,
                 binding: None,
+                config_server: None,
             },
+        };
+        if snapshot.bundle.is_ok() && self.config_server.is_some() {
+            snapshot.config_server = self.config_server.clone();
         }
+        snapshot
+    }
+
+    pub fn with_config_server(mut self, service_config: crate::ConfigServer) -> Self {
+        self.config_server = Some(service_config);
+        self
+    }
+
+    pub fn config_server(&self) -> Option<&crate::ConfigServer> {
+        self.config_server.as_ref()
     }
 
     pub fn ema_policy_changes(&self) -> Option<CloudConfigBundlePolicyChanges> {

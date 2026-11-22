@@ -103,7 +103,7 @@ impl Renderable for AgentsOverviewView {
         let state = self.state();
         if state.editing_metadata() && !layout.search.is_empty() {
             if state.name_input_active() {
-                let label = if state.new_session_name_editing {
+                let label = if state.new_session.is_some() {
                     "New agent name › "
                 } else {
                     "Rename › "
@@ -134,7 +134,8 @@ impl Renderable for AgentsOverviewView {
         let inset =
             |area: Rect| area.inner(Margin::new(/*horizontal*/ 2, /*vertical*/ 0));
         let footer_hints = self.center_footer_hints();
-        let state = self.state();
+        let mut state = self.state();
+        state.row_hits.clear();
         let filter_keys = if state.editing_metadata() {
             String::new()
         } else {
@@ -142,6 +143,7 @@ impl Renderable for AgentsOverviewView {
         };
         let grouping = match state.grouping {
             AgentsOverviewGrouping::Project => "Project",
+            AgentsOverviewGrouping::Directory => "Directory",
             AgentsOverviewGrouping::Status => "Status",
             AgentsOverviewGrouping::Model => "Model",
         };
@@ -158,19 +160,21 @@ impl Renderable for AgentsOverviewView {
             inset(layout.header),
             buf,
         );
+        let history = state.history.as_ref();
         let labels = TASK_FILTERS
             .iter()
-            .map(|(label, group)| {
+            .enumerate()
+            .map(|(index, (label, group))| {
                 let count = self
                     .rows
                     .iter()
+                    .filter(|row| state.includes_row(row))
                     .filter(|row| {
-                        #[cfg(feature = "custom-agents-overview")]
-                        if *label == "My agents" {
-                            return self.my_agents.contains(&row.thread_id);
-                        }
-                        group.is_none_or(|group| group == row.group)
+                        !cfg!(feature = "custom-agents-overview")
+                            || index != 0
+                            || self.is_my_agent(row)
                     })
+                    .filter(|row| group.is_none_or(|group| group == row.group))
                     .count();
                 format!("{label} {count}")
             })
@@ -185,12 +189,17 @@ impl Renderable for AgentsOverviewView {
             );
             tabs.width = tabs.width.saturating_sub(hint_width + 2);
         }
-        render_filled_tab_bar(
+        let targets = render_filled_tab_bar(
             &labels.iter().map(String::as_str).collect::<Vec<_>>(),
             state.status_filter,
             tabs,
             buf,
         );
+        if self.dock_focused == Some(false)
+            && let Some((_, tab)) = targets.iter().find(|(id, _)| *id == state.status_filter)
+        {
+            buf.set_style(*tab, crate::style::quiet_workspace_style());
+        }
         line(
             "─"
                 .repeat(usize::from(area.width.saturating_sub(/*rhs*/ 4)))
@@ -201,7 +210,7 @@ impl Renderable for AgentsOverviewView {
         if state.editing_metadata() {
             buf.set_style(layout.search, crate::bottom_pane::active_tab_style());
             if state.name_input_active() {
-                let label = if state.new_session_name_editing {
+                let label = if state.new_session.is_some() {
                     "New agent name › "
                 } else {
                     "Rename › "
@@ -234,10 +243,21 @@ impl Renderable for AgentsOverviewView {
                     .then(|| "Creating worktree…".to_owned())
             })
             .or_else(|| {
-                (state.refresh_failed && !state.loading).then(|| "Error loading tasks".to_owned())
+                state.removal.map(|action| match action {
+                    AgentsOverviewAction::Archive => {
+                        "Archiving task…  You can still browse.".to_owned()
+                    }
+                    AgentsOverviewAction::Delete => {
+                        "Deleting task…  You can still browse.".to_owned()
+                    }
+                })
+            })
+            .or_else(|| {
+                let failed = state.refresh_failed || history.is_some_and(|s| s.failed);
+                (failed && !state.loading).then(|| "Error loading tasks".to_owned())
             })
             .or_else(|| state.server_version_notice.clone());
-        if let Some(notice) = notice.filter(|_| !state.help && state.key_chord_hint.is_none()) {
+        if let Some(notice) = notice.filter(|_| !state.help) {
             line(notice.dim(), inset(layout.footer), buf);
         } else {
             line(hint_line(&footer_hints), inset(layout.footer), buf);

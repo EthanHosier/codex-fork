@@ -2,6 +2,7 @@
 //! Worktrees start at the repository default branch and bind only the new session.
 
 use super::*;
+use crate::app_server_session::is_server_shutting_down_error;
 use crate::startup_draft::StartupDraftInitialScreen;
 use crate::startup_draft::StartupDraftPump;
 use crate::startup_draft::StartupDraftSessionAction;
@@ -37,12 +38,12 @@ impl App {
         self.show_agents_overview_error(title, format!("{reason} A checkout was retained at {}; remove it with `git worktree remove <checkout-path>` from the source repository if it is no longer needed.", checkout.root.display()));
     }
 
-    #[cfg(any(not(feature = "custom-agents-overview"), test))]
+    #[cfg(test)]
     pub(in crate::app) async fn new_agents_overview_session(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        cwd: Option<AbsolutePathBuf>,
+        cwd: Option<PathBuf>,
     ) -> Result<AppRunControl> {
         self.new_agents_overview_session_with_name(tui, app_server, cwd, None)
             .await
@@ -52,7 +53,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        cwd: Option<AbsolutePathBuf>,
+        cwd: Option<PathBuf>,
         name: Option<String>,
     ) -> Result<AppRunControl> {
         if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
@@ -67,16 +68,13 @@ impl App {
                 Box::new(StartupDraftPump::new(
                     tui,
                     StartupDraftInitialScreen::Composer,
-                    StartupDraftSessionAction::NewFromCommandCenter,
+                    StartupDraftSessionAction::NewWhileRunning,
                 ))
             });
-        let mut display_config = self.chat_widget.config_ref().clone();
-        if let Some(cwd) = cwd.as_ref() {
-            display_config.cwd = cwd.clone();
-        }
         draft.apply_settings(
-            &crate::local_settings::LocalSettings::from(&display_config),
-            display_config.cwd.as_path(),
+            &crate::local_settings::LocalSettings::from(self.chat_widget.config_ref()),
+            cwd.as_deref()
+                .unwrap_or(&self.chat_widget.session_cwd().to_path_buf()),
         );
         draft.show(tui)?;
         // Keep the large session-start future off the TUI's stack in dev builds.
@@ -109,7 +107,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        cwd: Option<AbsolutePathBuf>,
+        cwd: Option<PathBuf>,
         name: Option<String>,
         managed_worktree: Option<(
             codex_worktree::WorktreeManager,
@@ -118,9 +116,7 @@ impl App {
         mut startup_draft: Option<&mut StartupDraftPump>,
     ) -> Result<AppRunControl> {
         #[cfg(feature = "custom-agents-overview")]
-        let add_to_my_agents = name.is_some();
-        #[cfg(feature = "custom-agents-overview")]
-        let my_agents_config_path = self.local_settings.user_config_path.clone();
+        let add_to_my_agents = name.is_some() && !self.app_server_target.uses_remote_workspace();
         if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
             if let Some((_, checkout)) = &managed_worktree {
                 self.agents_overview_retained_worktree_error(
@@ -131,9 +127,15 @@ impl App {
             }
             return Ok(AppRunControl::Continue);
         }
-        let Some((config, remote_cwd)) = self
-            .agents_overview_session_config(tui, app_server, cwd, startup_draft.as_deref_mut())
-            .await
+        self.cancel_cloud_inventory_refresh(app_server).await;
+        // Keep folder consent and config loading off the session-start stack frame.
+        let Some((config, remote_cwd)) = Box::pin(self.agents_overview_session_config(
+            tui,
+            app_server,
+            cwd,
+            startup_draft.as_deref_mut(),
+        ))
+        .await
         else {
             if let Some((_, checkout)) = &managed_worktree {
                 self.agents_overview_retained_worktree_error(
@@ -179,23 +181,17 @@ impl App {
                 /*session_start_source*/ None,
                 remote_cwd.as_deref(),
                 selected_profile.as_ref(),
+                self.backend_preference_context.local_cwd.as_deref(),
             )),
         )
         .await;
         let mut started = match result {
             Ok(started) => started,
             Err(error) => {
-                // Older servers omit the reason. Only use their specific message when
-                // data is absent, so other invalid requests aren't misclassified.
                 let (title, message) = if matches!(
                     error.downcast_ref::<TypedRequestError>(),
                     Some(TypedRequestError::Server { source, .. })
-                        if source.code == -32600
-                            && match &source.data {
-                                Some(data) => data.get("reason").and_then(serde_json::Value::as_str)
-                                    == Some("serverShuttingDown"),
-                                None => source.message == "Server is draining; retry after reconnecting",
-                            }
+                        if is_server_shutting_down_error(source)
                 ) {
                     let mut message = String::from(
                         "New sessions are paused while active turns finish or are canceled. The default shutdown wait is up to one minute.",
@@ -232,21 +228,24 @@ impl App {
                 .insert(thread_id, selected.profile_id);
         }
         if let Some((manager, checkout)) = &managed_worktree {
-            let result =
-                if crate::session_resume::cwds_differ(started.session.cwd.as_path(), &checkout.cwd)
-                {
-                    Err(anyhow::anyhow!(
-                        "The server did not apply the worktree directory."
-                    ))
-                } else {
-                    manager.bind_thread(&checkout.root, &thread_id.to_string())
-                };
+            let result = if crate::session_resume::cwds_differ(
+                &started.session.cwd.to_path_buf(),
+                &checkout.cwd,
+            ) {
+                Err(anyhow::anyhow!(
+                    "The server did not apply the worktree directory."
+                ))
+            } else {
+                manager.bind_thread(&checkout.root, &thread_id.to_string())
+            };
             if let Err(error) = result {
                 let _ = app_server.thread_unsubscribe(thread_id).await;
                 self.agents_overview_retained_worktree_error(checkout, /*title*/ None, error);
                 return Ok(AppRunControl::Continue);
             }
         }
+        self.backend_registry
+            .register_started(app_server.backend_id(), &started)?;
         self.agents_overview
             .blank_sessions
             .insert(thread_id, started.clone());
@@ -270,26 +269,13 @@ impl App {
                     "Could not open the new session.",
                 );
             }
+        } else if self.agents_overview.workspace.is_open() {
+            self.focus_workspace_composer(tui);
+            self.repaint_agents_overview();
         }
         #[cfg(feature = "custom-agents-overview")]
         if add_to_my_agents && self.current_displayed_thread_id() == Some(thread_id) {
-            let id = thread_id.to_string();
-            if !self.local_settings.tui.my_agents.contains(&id) {
-                let mut my_agents = self.local_settings.tui.my_agents.clone();
-                my_agents.push(id);
-                match self
-                    .persist_my_agents_config(my_agents_config_path.as_path(), &my_agents)
-                    .await
-                {
-                    Ok(()) => {
-                        self.local_settings.tui.my_agents = my_agents.clone();
-                        self.config.tui_my_agents = my_agents;
-                    }
-                    Err(error) => self.add_agents_overview_error(format!(
-                        "The new agent was created, but could not be added to My agents: {error}"
-                    )),
-                }
-            }
+            self.add_my_agent(thread_id).await;
         }
         Ok(control)
     }
@@ -306,19 +292,22 @@ impl App {
         {
             return;
         }
-        if !self.config.features.enabled(Feature::Worktrees)
-            || crate::uses_remote_workspace_or_environment(
-                &self.app_server_target,
-                self.environment_manager.as_ref(),
-            )
-        {
+        if crate::uses_remote_workspace_or_environment(
+            &self.app_server_target,
+            self.environment_manager.as_ref(),
+        ) {
             self.add_agents_overview_error(
                 "Managed worktrees require local worktree support.".to_string(),
             );
             return;
         }
         let Some((config, _)) = self
-            .agents_overview_session_config(tui, app_server, cwd, /*startup_draft*/ None)
+            .agents_overview_session_config(
+                tui,
+                app_server,
+                cwd.map(Into::into),
+                /*startup_draft*/ None,
+            )
             .await
         else {
             return;

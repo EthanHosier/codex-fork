@@ -8,6 +8,8 @@
 
 use std::fmt;
 use std::io::Write;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
@@ -18,6 +20,7 @@ use crossterm::event::PushKeyboardEnhancementFlags;
 use ratatui::crossterm::execute;
 
 const DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR: &str = "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT";
+static REPORTS_KEY_RELEASES: AtomicBool = AtomicBool::new(/*v*/ false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VscodeDetection {
@@ -85,28 +88,11 @@ pub(super) fn running_in_vscode_terminal() -> bool {
 }
 
 pub(crate) fn detect_vscode_terminal() -> VscodeDetection {
-    if term_program_is_vscode(std::env::var("TERM_PROGRAM").ok().as_deref()) {
-        return VscodeDetection::VsCode;
-    }
-    vscode_terminal_detected(
-        std::env::var("TERM_PROGRAM").ok().as_deref(),
-        windows_vscode_detection(),
-    )
-}
-
-fn vscode_terminal_detected(
-    linux_term_program: Option<&str>,
-    windows_detection: VscodeDetection,
-) -> VscodeDetection {
-    if term_program_is_vscode(linux_term_program) {
+    if terminal_info().name == TerminalName::VsCode {
         VscodeDetection::VsCode
     } else {
-        windows_detection
+        windows_vscode_detection()
     }
-}
-
-fn term_program_is_vscode(value: Option<&str>) -> bool {
-    value.is_some_and(|value| value.eq_ignore_ascii_case("vscode"))
 }
 
 fn windows_vscode_detection() -> VscodeDetection {
@@ -195,7 +181,7 @@ fn read_windows_vscode_detection_with_timeout(
         .lines()
         .find_map(|line| line.trim_end_matches('\r').strip_prefix("TERM_PROGRAM="))
         .filter(|value| !value.trim().is_empty());
-    if term_program_is_vscode(term_program) {
+    if term_program.is_some_and(|value| value.eq_ignore_ascii_case("vscode")) {
         VscodeDetection::VsCode
     } else {
         VscodeDetection::Other
@@ -206,11 +192,12 @@ fn read_windows_vscode_detection_with_timeout(
 #[path = "windows_term_program_tests.rs"]
 mod windows_term_program_tests;
 
-/// Restore keyboard reporting and return the mouse policy from the same fresh tmux probe.
-pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::MouseCapture {
+/// Restore keyboard reporting and return the settings from the same tmux probe.
+pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::Options {
     let tmux_options = super::tmux::options();
     if keyboard_enhancement_disabled() {
-        return tmux_options.mouse_capture;
+        set_reports_key_releases(/*reports*/ false);
+        return tmux_options;
     }
 
     let running_in_tmux_session = running_in_tmux_session();
@@ -220,21 +207,25 @@ pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmu
         None
     };
 
-    let _ = execute!(
+    let flags = keyboard_enhancement_flags(
+        terminal_info().name,
+        running_in_tmux_session,
+        tmux_extended_keys_format,
+    );
+    let result = execute!(
         writer,
         DisableModifyOtherKeys,
-        PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
-            terminal_info().name,
-            running_in_tmux_session,
-            tmux_extended_keys_format
-        ))
+        PushKeyboardEnhancementFlags(flags)
+    );
+    set_reports_key_releases(
+        result.is_ok() && flags.contains(KeyboardEnhancementFlags::REPORT_EVENT_TYPES),
     );
 
     if tmux_should_enable_modify_other_keys_for(running_in_tmux_session, tmux_extended_keys_format)
     {
         let _ = execute!(writer, EnableModifyOtherKeys);
     }
-    tmux_options.mouse_capture
+    tmux_options
 }
 
 fn keyboard_enhancement_flags(
@@ -256,6 +247,14 @@ fn keyboard_enhancement_flags(
     } else {
         flags | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
     }
+}
+
+pub(super) fn reports_key_releases() -> bool {
+    REPORTS_KEY_RELEASES.load(Ordering::Relaxed)
+}
+
+pub(super) fn set_reports_key_releases(reports: bool) {
+    REPORTS_KEY_RELEASES.store(reports, Ordering::Relaxed);
 }
 
 fn running_in_tmux_session() -> bool {
@@ -280,16 +279,22 @@ fn tmux_should_enable_modify_other_keys_for(
 }
 
 pub(super) fn restore_keyboard_enhancement_stack(writer: &mut impl Write) {
-    let _ = execute!(writer, PopKeyboardEnhancementFlags, DisableModifyOtherKeys);
+    if execute!(writer, PopKeyboardEnhancementFlags, DisableModifyOtherKeys).is_ok() {
+        set_reports_key_releases(/*reports*/ false);
+    }
 }
 
 pub(super) fn reset_keyboard_reporting_after_exit(writer: &mut impl Write) {
-    let _ = execute!(
+    if execute!(
         writer,
         PopKeyboardEnhancementFlags,
         ResetKeyboardEnhancementFlags,
         DisableModifyOtherKeys
-    );
+    )
+    .is_ok()
+    {
+        set_reports_key_releases(/*reports*/ false);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -369,7 +374,6 @@ mod tests {
     use super::parse_bool_env;
     use super::tmux_session_detected;
     use super::tmux_should_enable_modify_other_keys_for;
-    use super::vscode_terminal_detected;
     use codex_terminal_detection::TerminalName;
     use crossterm::Command;
     use crossterm::event::PushKeyboardEnhancementFlags;
@@ -513,24 +517,6 @@ mod tests {
                 /*is_wsl*/ false,
                 detection
             ));
-        }
-    }
-
-    #[test]
-    fn vscode_terminal_detection_uses_linux_and_windows_term_program() {
-        for detection in [
-            VscodeDetection::VsCode,
-            VscodeDetection::Other,
-            VscodeDetection::Unknown,
-        ] {
-            assert_eq!(
-                vscode_terminal_detected(Some("vscode"), detection),
-                VscodeDetection::VsCode,
-            );
-            assert_eq!(
-                vscode_terminal_detected(/*linux_term_program*/ None, detection),
-                detection,
-            );
         }
     }
 

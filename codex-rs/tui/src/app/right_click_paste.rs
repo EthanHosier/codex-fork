@@ -1,9 +1,13 @@
-//! Right-click CLIPBOARD and local X11 middle-click PRIMARY fallback for an editable composer.
+//! Clipboard text paste from keyboard shortcuts, right-click, or X11 middle-click PRIMARY.
+//! The policy also reports why a configured mode is unavailable in this terminal.
 //! Existing selection handlers run first. Only a draw may deliver a read, so real input
 //! invalidates pending paste before completion and is never replaced by clipboard text.
+//! Submit and queue keys wait for a fresh press after a pending draft paste.
 
 use super::*;
+use crate::bottom_pane::ClipboardPasteTarget;
 use crate::clipboard_copy::worker::PasteSource;
+use crate::transcript_mode::TranscriptMode;
 use crate::tui::VscodeDetection;
 use codex_config::types::RightClickPaste;
 use crossterm::event::MouseButton;
@@ -11,13 +15,14 @@ use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 
 pub(super) struct PendingPaste {
-    thread: Option<ThreadId>,
-    draft: (String, usize),
+    target: (Option<ThreadId>, ClipboardPasteTarget),
     source: PasteSource,
-    _request: Arc<()>,
+    shortcut: Option<KeyCode>,
+    image_error: Option<String>,
+    pub(super) request: Arc<()>,
 }
 
-pub(super) struct PasteEnvironment {
+pub(crate) struct PasteEnvironment {
     pub(super) primary: bool,
     pub(super) platform_default: bool,
     pub(super) ssh: bool,
@@ -26,7 +31,7 @@ pub(super) struct PasteEnvironment {
 }
 
 impl PasteEnvironment {
-    pub(super) fn detect() -> Self {
+    pub(crate) fn detect() -> Self {
         Self {
             primary: crate::clipboard_copy::primary::available(),
             platform_default: cfg!(any(target_os = "windows", target_os = "linux")),
@@ -36,42 +41,68 @@ impl PasteEnvironment {
         }
     }
 
-    fn allows(&self, mode: RightClickPaste) -> bool {
-        if self.ssh || self.vscode == VscodeDetection::VsCode {
-            return false;
+    pub(super) fn allows(&self, mode: RightClickPaste, transcript_mode: TranscriptMode) -> bool {
+        self.status(mode, transcript_mode)
+            .unwrap_or(/*default*/ false)
+    }
+
+    /// Return the effective state or why this terminal must handle paste itself.
+    pub(crate) fn status(
+        &self,
+        mode: RightClickPaste,
+        transcript_mode: TranscriptMode,
+    ) -> Result<bool, &'static str> {
+        if mode == RightClickPaste::Off {
+            return Ok(false);
+        }
+        if !transcript_mode.is_owned() {
+            return Err("Unavailable in inline mode; use your terminal's paste command");
+        }
+        if self.ssh {
+            return Err("Unavailable over SSH; use your terminal's paste command");
+        }
+        if self.vscode == VscodeDetection::VsCode {
+            return Err("VS Code handles pasting; use its terminal paste command");
+        }
+        if mode == RightClickPaste::Auto && self.wsl && self.vscode == VscodeDetection::Unknown {
+            return Err(
+                "Auto cannot identify this WSL terminal; use On or your terminal's paste command",
+            );
         }
         match mode {
-            RightClickPaste::Off => false,
-            RightClickPaste::On => !cfg!(target_os = "android"),
-            RightClickPaste::Auto => {
-                self.platform_default && !(self.wsl && self.vscode == VscodeDetection::Unknown)
-            }
+            RightClickPaste::Off => Ok(false),
+            RightClickPaste::On if cfg!(target_os = "android") => Err("Unavailable on Android"),
+            RightClickPaste::On => Ok(true),
+            RightClickPaste::Auto => Ok(self.platform_default),
         }
     }
 }
 
 impl App {
-    fn right_click_paste_target(
+    pub(super) fn right_click_paste_target(
         &self,
         tui: &tui::Tui,
         source: PasteSource,
-    ) -> Option<(Option<ThreadId>, (String, usize))> {
-        let allowed = match source {
-            PasteSource::Clipboard => {
-                !self.transcript_view.has_selection_range()
-                    && !self
-                        .chat_widget
-                        .rendered_selection
-                        .borrow()
-                        .view
-                        .has_selection_range()
-                    && self
-                        .right_click_paste_environment
-                        .allows(self.local_settings.tui.right_click_paste)
-            }
-            PasteSource::Primary => self.right_click_paste_environment.primary,
-        };
-        if !tui.is_owned_screen()
+        shortcut: Option<KeyCode>,
+    ) -> Option<(Option<ThreadId>, ClipboardPasteTarget)> {
+        let allowed = shortcut.is_some()
+            || match source {
+                PasteSource::Clipboard => {
+                    !self.transcript_view.has_selection_range()
+                        && !self
+                            .chat_widget
+                            .rendered_selection
+                            .borrow()
+                            .view
+                            .has_selection_range()
+                        && self.right_click_paste_environment.allows(
+                            self.local_settings.tui.right_click_paste,
+                            self.local_settings.transcript_mode,
+                        )
+                }
+                PasteSource::Primary => self.right_click_paste_environment.primary,
+            };
+        if (shortcut.is_none() && !tui.is_owned_screen())
             || self.overlay.is_some()
             || self.transcript_view.is_search_editing()
             || !allowed
@@ -80,11 +111,16 @@ impl App {
         }
         Some((
             self.current_displayed_thread_id(),
-            self.chat_widget.right_click_paste_target()?,
+            self.chat_widget.clipboard_paste_target(shortcut)?,
         ))
     }
 
-    pub(super) fn start_right_click_paste(&mut self, tui: &mut tui::Tui, mouse: MouseEvent) {
+    pub(super) fn start_right_click_paste(
+        &mut self,
+        tui: &mut tui::Tui,
+        mouse: MouseEvent,
+        context: ClipboardPasteContext,
+    ) {
         let source = match mouse.kind {
             MouseEventKind::Down(MouseButton::Right) => PasteSource::Clipboard,
             MouseEventKind::Down(MouseButton::Middle) => PasteSource::Primary,
@@ -93,22 +129,76 @@ impl App {
         if !mouse.modifiers.is_empty() || self.pending_right_click_paste.is_some() {
             return;
         }
-        let Some((thread, draft)) = self.right_click_paste_target(tui, source) else {
+        // The restricted handoff does not run the ordinary mouse editor first. Settle any
+        // held typing before taking the target of an eligible click.
+        if context == ClipboardPasteContext::DraftHandoff
+            && (self
+                .right_click_paste_target(tui, source, /*shortcut*/ None)
+                .is_none()
+                || !self.chat_widget.prepare_composer_mouse(mouse))
+        {
+            return;
+        }
+        self.start_clipboard_text_paste(
+            tui, source, /*shortcut*/ None, /*image_error*/ None,
+        );
+    }
+
+    pub(crate) fn start_clipboard_text_paste(
+        &mut self,
+        tui: &mut tui::Tui,
+        source: PasteSource,
+        shortcut: Option<KeyCode>,
+        image_error: Option<String>,
+    ) {
+        let Some(target) = self.right_click_paste_target(tui, source, shortcut) else {
             return;
         };
         match tui.clipboard.read_text(source, tui.frame_requester()) {
             Ok(Some(request)) => {
                 self.pending_right_click_paste = Some(PendingPaste {
-                    thread,
-                    draft,
+                    target,
                     source,
-                    _request: request,
+                    shortcut,
+                    image_error,
+                    request,
                 });
                 tui.frame_requester().schedule_frame();
             }
-            Ok(None) => {}
-            Err(error) => self.chat_widget.add_error_message(error),
+            Ok(None) => {
+                if let Some(error) = image_error {
+                    self.chat_widget.add_error_message(error);
+                }
+            }
+            Err(error) => self
+                .chat_widget
+                .add_error_message(image_error.unwrap_or(error)),
         }
+    }
+
+    /// Never submit unseen clipboard text or send the draft without it.
+    pub(super) fn guard_pending_paste_submission(
+        &mut self,
+        tui: &tui::Tui,
+        event: &TuiEvent,
+    ) -> bool {
+        let (Some(pending), TuiEvent::Key(key)) = (&self.pending_right_click_paste, event) else {
+            return false;
+        };
+        let composer = &self.keymap.composer;
+        if !(composer.submit.is_pressed(*key) || composer.queue.is_pressed(*key))
+            || !matches!(pending.target.1, ClipboardPasteTarget::Draft(..))
+            || self
+                .right_click_paste_target(tui, pending.source, pending.shortcut)
+                .as_ref()
+                != Some(&pending.target)
+        {
+            return false;
+        }
+        if key.kind == KeyEventKind::Press {
+            self.chat_widget.show_paste_pending();
+        }
+        true
     }
 
     /// Invalidate before polling, even when the worker has already completed.
@@ -124,10 +214,23 @@ impl App {
             TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::FocusGained => true,
             TuiEvent::Mouse(mouse) => {
                 mouse.kind == MouseEventKind::Moved
-                    || mouse.kind == MouseEventKind::Up(button)
-                    || (mouse.kind == MouseEventKind::Down(button) && mouse.modifiers.is_empty())
+                    || (pending.shortcut.is_none()
+                        && (mouse.kind == MouseEventKind::Up(button)
+                            || (mouse.kind == MouseEventKind::Down(button)
+                                && mouse.modifiers.is_empty())))
             }
-            TuiEvent::Key(_) | TuiEvent::Paste(_) | TuiEvent::FocusLost | TuiEvent::Resume => false,
+            TuiEvent::Key(key) if key.kind == KeyEventKind::Release => true,
+            TuiEvent::Key(key) => {
+                pending.shortcut.is_some()
+                    && match key.code {
+                        KeyCode::Insert => key.modifiers == KeyModifiers::SHIFT,
+                        KeyCode::Char(c) if c.eq_ignore_ascii_case(&'v') => {
+                            key.modifiers == KeyModifiers::CONTROL
+                        }
+                        _ => false,
+                    }
+            }
+            TuiEvent::Paste(_) | TuiEvent::FocusLost | TuiEvent::Resume => false,
         };
         if !keep {
             self.pending_right_click_paste = None;
@@ -146,26 +249,30 @@ impl App {
             tui.clipboard.take_text_result();
             return event;
         };
-        let Some((thread, draft)) = self.right_click_paste_target(tui, pending.source) else {
-            self.pending_right_click_paste = None;
-            return event;
-        };
-        if pending.thread != thread || pending.draft != draft {
+        if self
+            .right_click_paste_target(tui, pending.source, pending.shortcut)
+            .as_ref()
+            != Some(&pending.target)
+        {
             self.pending_right_click_paste = None;
             return event;
         }
         let Some(result) = tui.clipboard.take_text_result() else {
             return event;
         };
-        self.pending_right_click_paste = None;
+        let image_error = self
+            .pending_right_click_paste
+            .take()
+            .and_then(|paste| paste.image_error);
         match result {
             Ok(text) if !text.is_empty() => {
                 tui.frame_requester().schedule_frame();
                 TuiEvent::Paste(text)
             }
-            Ok(_) => event,
-            Err(error) => {
-                self.chat_widget.add_error_message(error);
+            result => {
+                if let Some(error) = image_error.or_else(|| result.err()) {
+                    self.chat_widget.add_error_message(error);
+                }
                 event
             }
         }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::RestrictRootCapabilities;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_features::Feature;
@@ -33,15 +34,22 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 
-#[test_case(SessionSource::Exec, None, true, false; "root_without_capability")]
-#[test_case(SessionSource::Exec, Some("send_user_message_async"), true, true; "legacy_capability_enabled")]
-#[test_case(SessionSource::Exec, Some("send_user_message_async"), false, false; "legacy_capability_disabled")]
-#[test_case(SessionSource::Exec, Some("request_user_input_async"), true, true; "current_capability_enabled")]
-#[test_case(SessionSource::Exec, Some("request_user_input_async"), false, false; "current_capability_disabled")]
-#[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), Some("request_user_input_async"), true, false; "subagent")]
+enum ThreadKind {
+    Root,
+    NativeChild,
+    HostRestricted,
+}
+
+#[test_case(ThreadKind::Root, None, true, false; "root_without_capability")]
+#[test_case(ThreadKind::Root, Some("send_user_message_async"), true, true; "legacy_capability_enabled")]
+#[test_case(ThreadKind::Root, Some("send_user_message_async"), false, false; "legacy_capability_disabled")]
+#[test_case(ThreadKind::Root, Some("request_user_input_async"), true, true; "current_capability_enabled")]
+#[test_case(ThreadKind::Root, Some("request_user_input_async"), false, false; "current_capability_disabled")]
+#[test_case(ThreadKind::NativeChild, Some("request_user_input_async"), true, false; "subagent")]
+#[test_case(ThreadKind::HostRestricted, Some("request_user_input_async"), true, false; "host_restricted")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn async_question_registration_respects_user_input_setting(
-    session_source: SessionSource,
+    thread_kind: ThreadKind,
     catalog_tool: Option<&'static str>,
     enabled: bool,
     expect_question_tool: bool,
@@ -68,15 +76,21 @@ async fn async_question_registration_respects_user_input_setting(
         })
         .build_with_auto_env(&server)
         .await?;
-    let is_root = !session_source.is_non_root_agent();
-    let thread = test
-        .thread_manager
-        .start_thread(StartThreadOptions {
-            session_source: Some(session_source),
-            ..StartThreadOptions::new(test.config.clone())
-        })
-        .await?
-        .thread;
+    let session_source = match thread_kind {
+        ThreadKind::Root => SessionSource::Exec,
+        ThreadKind::NativeChild => SessionSource::SubAgent(SubAgentSource::Other("test".into())),
+        ThreadKind::HostRestricted => SessionSource::Custom("host".into()),
+    };
+    let mut options = StartThreadOptions {
+        session_source: Some(session_source),
+        ..StartThreadOptions::new(test.config.clone())
+    };
+    if matches!(thread_kind, ThreadKind::HostRestricted) {
+        options
+            .thread_extension_init
+            .insert(RestrictRootCapabilities);
+    }
+    let thread = test.thread_manager.start_thread(options).await?.thread;
     thread
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: "Report progress.".to_string(),
@@ -99,7 +113,7 @@ async fn async_question_registration_respects_user_input_setting(
             .iter()
             .filter(|tool| tool["name"] == "send_message_to_user_async")
             .count(),
-        usize::from(is_root),
+        usize::from(matches!(thread_kind, ThreadKind::Root)),
     );
     Ok(())
 }
@@ -194,21 +208,42 @@ async fn persistent_async_message_guidance_follows_tool_availability(
     Ok(())
 }
 
-#[test_case(SessionSource::Exec, None, &[], false; "root_without_opt_in")]
-#[test_case(SessionSource::Exec, None, &[Feature::SendAsyncMessage], false; "root_with_retired_feature")]
-#[test_case(SessionSource::Exec, Some("send_user_message_async"), &[], false; "root_with_legacy_question_tool")]
-#[test_case(SessionSource::Exec, Some("request_user_input_async"), &[], false; "root_with_question_tool")]
-#[test_case(SessionSource::Exec, Some("send_message_to_user_async"), &[], true; "root_with_catalog_opt_in")]
-#[test_case(SessionSource::Exec, None, &[Feature::SendMessageToUserAsync], true; "root_with_feature_opt_in")]
-#[test_case(SessionSource::Exec, Some("send_message_to_user_async"), &[Feature::SendMessageToUserAsync], true; "root_with_both_opt_ins")]
-#[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), Some("send_message_to_user_async"), &[], false; "subagent_with_catalog_opt_in")]
-#[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), None, &[Feature::SendMessageToUserAsync], false; "subagent_with_feature_opt_in")]
-#[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), Some("send_message_to_user_async"), &[Feature::SendMessageToUserAsync], false; "subagent_with_both_opt_ins")]
+const ROOT_MESSAGES: &str = "[features]\nsend_message_to_user_async = true";
+const EXPLICIT_ROOT_MESSAGES: &str =
+    "[features.send_message_to_user_async]\nroot_agent = true\nsubagents = false";
+const SUBAGENT_MESSAGES: &str =
+    "[features.send_message_to_user_async]\nroot_agent = false\nsubagents = true";
+
+#[test_case(SessionSource::Exec, None, "", false; "root_without_opt_in")]
+#[test_case(SessionSource::Exec, None, "[features]\nsend_async_message = true", false; "root_with_retired_feature")]
+#[test_case(SessionSource::Exec, Some("send_user_message_async"), "", false; "root_with_legacy_question_tool")]
+#[test_case(SessionSource::Exec, Some("request_user_input_async"), "", false; "root_with_question_tool")]
+#[test_case(SessionSource::Exec, Some("send_message_to_user_async"), SUBAGENT_MESSAGES, true; "root_with_catalog_opt_in")]
+#[test_case(SessionSource::Exec, None, ROOT_MESSAGES, true; "root_with_feature_opt_in")]
+#[test_case(SessionSource::Exec, None, EXPLICIT_ROOT_MESSAGES, true; "root_with_named_opt_in")]
+#[test_case(SessionSource::Exec, Some("send_message_to_user_async"), ROOT_MESSAGES, true; "root_with_both_opt_ins")]
+#[test_case(SessionSource::Exec, None, SUBAGENT_MESSAGES, false; "child_opt_in_does_not_enable_root")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), Some("send_message_to_user_async"), "", false; "subagent_with_catalog_opt_in")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), None, ROOT_MESSAGES, false; "subagent_with_feature_opt_in")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Other("test".to_string())), Some("send_message_to_user_async"), ROOT_MESSAGES, false; "subagent_with_both_opt_ins")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Compact), None, SUBAGENT_MESSAGES, false; "compaction_helper_cannot_message_user")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+    parent_thread_id: codex_protocol::ThreadId::new(), depth: 1, agent_path: None,
+    agent_nickname: None, agent_role: None,
+}), Some("send_message_to_user_async"), ROOT_MESSAGES, false; "spawned_child_requires_opt_in")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+    parent_thread_id: codex_protocol::ThreadId::new(), depth: 1, agent_path: None,
+    agent_nickname: None, agent_role: None,
+}), Some("send_message_to_user_async"), EXPLICIT_ROOT_MESSAGES, false; "explicitly_disabled_child_with_catalog_opt_in")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+    parent_thread_id: codex_protocol::ThreadId::new(), depth: 1, agent_path: None,
+    agent_nickname: None, agent_role: None,
+}), None, SUBAGENT_MESSAGES, true; "spawned_child_with_root_disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn freeform_async_message_requires_root_and_catalog_or_feature_opt_in(
+async fn freeform_async_message_respects_independent_agent_opt_ins(
     session_source: SessionSource,
     catalog_tool: Option<&'static str>,
-    enabled_features: &'static [Feature],
+    feature_config: &'static str,
     expected: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -225,13 +260,9 @@ async fn freeform_async_message_requires_root_and_catalog_or_feature_opt_in(
             model.experimental_supported_tools =
                 catalog_tool.map(str::to_string).into_iter().collect();
         })
-        .with_config(move |config| {
-            for &feature in enabled_features {
-                config
-                    .features
-                    .enable(feature)
-                    .expect("enable async messaging test feature");
-            }
+        .with_pre_build_hook(move |home| {
+            std::fs::write(home.join("config.toml"), feature_config)
+                .expect("write async messaging config");
         })
         .build_with_auto_env(&server)
         .await?;
@@ -353,6 +384,7 @@ async fn freeform_async_message_emits_an_item_without_ending_the_turn(
     })
     .await;
     let expected = serde_json::to_value(TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: CALL_ID.to_string(),
         content: vec![AgentMessageContent::Text {
             text: MESSAGE.to_string(),
@@ -541,6 +573,7 @@ async fn request_user_input_async_emits_item_and_does_not_end_the_turn(
     assert_eq!(
         serde_json::to_value(&started)?,
         serde_json::to_value(AgentMessageItem {
+            moderation: None,
             id: CALL_ID.to_string(),
             content: vec![AgentMessageContent::Text {
                 text: MESSAGE.to_string(),

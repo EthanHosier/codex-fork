@@ -6,7 +6,7 @@ use assert_matches::assert_matches;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn parent_owned_thread_allows_bare_navigation_commands() {
+fn parent_owned_thread_allows_local_commands() {
     for (command, expected) in [
         ("/agents", SlashCommand::Agents),
         ("/subagents", SlashCommand::MultiAgents),
@@ -14,6 +14,8 @@ fn parent_owned_thread_allows_bare_navigation_commands() {
         ("/btw", SlashCommand::Btw),
         ("/diff ", SlashCommand::Diff),
         ("/daemon", SlashCommand::Daemon),
+        ("/rc", SlashCommand::Rc),
+        ("/remote", SlashCommand::Rc),
         ("/warnings", SlashCommand::Warnings),
     ] {
         let (mut composer, _rx) = new_test_composer();
@@ -23,6 +25,22 @@ fn parent_owned_thread_allows_bare_navigation_commands() {
         assert_eq!(
             composer.handle_submission(/*should_queue*/ false).0,
             InputResult::Command(expected)
+        );
+    }
+
+    for (command, args) in [
+        (SlashCommand::Title, "model"),
+        (SlashCommand::Statusline, "model --no-colors"),
+        (SlashCommand::Rc, "invalid"),
+    ] {
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_parent_owned_thread();
+        let name = command.command();
+        composer.set_text_content(format!("/{name} {args}"), Vec::new(), Vec::new());
+
+        assert_eq!(
+            composer.handle_key_event(KeyCode::Enter.into()).0,
+            InputResult::CommandWithArgs(command, args.into(), Vec::new())
         );
     }
 }
@@ -44,7 +62,7 @@ fn parent_owned_thread_allows_safe_command_selected_from_prefix() {
 #[cfg(not(feature = "custom-agents-overview"))]
 fn left_navigates_only_from_an_empty_prompt() {
     let (mut composer, mut events) = new_test_composer();
-    composer.set_agents_navigation_enabled(/*enabled*/ true);
+    composer.command_center_enabled = true;
     composer.insert_str("ab");
     composer.handle_key_event(KeyCode::Left.into());
     composer.insert_str("!");
@@ -68,7 +86,7 @@ fn left_navigates_only_from_an_empty_prompt() {
 #[cfg(feature = "custom-agents-overview")]
 fn ctrl_q_opens_agents_overview_only_from_an_empty_prompt() {
     let (mut composer, mut events) = new_test_composer();
-    composer.set_agents_navigation_enabled(/*enabled*/ true);
+    composer.command_center_enabled = true;
 
     composer.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     assert_matches!(events.try_recv(), Ok(AppEvent::OpenAgentsOverview));
@@ -95,7 +113,7 @@ fn agents_shortcut_respects_attachments_pastes_and_other_input_surfaces() {
     ];
     for setup in setups {
         let (mut composer, mut events) = new_test_composer();
-        composer.set_agents_navigation_enabled(/*enabled*/ true);
+        composer.command_center_enabled = true;
         setup(&mut composer);
         composer.handle_key_event(agents_shortcut_key());
         assert!(
@@ -133,14 +151,14 @@ fn agents_navigation_hint_snapshots() {
             /*width*/ 80,
             /*enhanced_keys_supported*/ false,
             |composer| {
-                composer.set_agents_navigation_enabled(/*enabled*/ true);
+                composer.command_center_enabled = true;
                 match name {
                     "agents_navigation_help" => {
                         composer.handle_key_event(KeyCode::Char('?').into());
                     }
                     "agents_navigation_status" => {
                         composer.set_status_line_enabled(/*enabled*/ true);
-                        composer.set_status_line(Some(Line::from("model · project")));
+                        composer.set_status_line(Some(Line::from("model · project").into()));
                     }
                     _ => {}
                 }
@@ -150,14 +168,14 @@ fn agents_navigation_hint_snapshots() {
 }
 
 #[test]
-fn agents_shortcut_is_independent_of_editor_and_vim_left_remaps() {
+fn left_respects_editor_and_edit_history_remaps() {
     use codex_config::types::KeybindingSpec;
     use codex_config::types::KeybindingsSpec;
     use codex_config::types::TuiKeymap;
 
     for vim in [false, true] {
         let (mut composer, mut events) = new_test_composer();
-        composer.set_agents_navigation_enabled(/*enabled*/ true);
+        composer.command_center_enabled = true;
         composer.insert_str("previous");
         composer.handle_key_event(KeyCode::Enter.into());
         let mut config = TuiKeymap::default();
